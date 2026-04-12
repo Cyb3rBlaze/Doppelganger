@@ -15,4 +15,4 @@ async def health_check() -> HealthResponse:
 
 @router.post("/messages/handle", response_model=MessageResponse)
 async def handle_message_route(payload: MessageRequest) -> MessageResponse:
-    return await handle_message(payload)
+    return await handle_message(payload.to_message())

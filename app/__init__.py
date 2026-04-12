@@ -1,1 +1,1 @@
-"""Application package for the personal assistant."""
+"""Application package for the AI doppelganger."""

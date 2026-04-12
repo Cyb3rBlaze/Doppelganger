@@ -1,14 +1,14 @@
 # AGENTS.md
 
 ## Project Intent
-- Build a personal assistant for a single user.
+- Build an AI doppelganger for a single user.
 - Support Telegram and Gmail as the first channels.
 - Run locally on a FastAPI server.
 
 ## V0 Scope
 - Accept inbound messages from Telegram and Gmail.
 - Normalize incoming messages into one internal format.
-- Pass messages through one assistant loop.
+- Pass messages through one doppelganger loop.
 - Return a plain-text response through the originating channel.
 
 ## TODOs
@@ -18,15 +18,15 @@
 
 ## Architecture Direction
 - Keep one backend service.
-- Keep channel adapters isolated from core assistant logic.
-- Keep the assistant loop channel-agnostic.
+- Keep channel adapters isolated from core doppelganger logic.
+- Keep the doppelganger loop channel-agnostic.
 - Prefer simple, inspectable components over abstractions.
 
 ## Suggested Layout
 - `app/main.py`: FastAPI entrypoint
 - `app/api/`: webhook and health endpoints
 - `app/channels/`: Telegram and Gmail adapters
-- `app/core/`: message models, orchestration, assistant loop
+- `app/core/`: message models, orchestration, doppelganger loop
 - `app/services/`: LLM client and shared services
 - `design_docs/`: architecture and implementation notes
 
@@ -38,4 +38,4 @@
 - Keep secrets in environment variables, never in code.
 
 ## Near-Term Goal
-- Build a clean end-to-end loop: inbound message -> normalize -> assistant response -> outbound reply
+- Build a clean end-to-end loop: inbound message -> normalize -> doppelganger response -> outbound reply

@@ -1,1 +1,1 @@
-"""Core assistant logic and shared models."""
+"""Core doppelganger logic and shared models."""
