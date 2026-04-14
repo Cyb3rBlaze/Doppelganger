@@ -93,6 +93,31 @@ def test_build_telegram_api_url_uses_token(monkeypatch) -> None:
     assert url == "https://api.telegram.org/botabc/sendMessage"
 
 
+def test_get_telegram_allowed_user_ids_parses_csv(monkeypatch) -> None:
+    monkeypatch.setenv("TELEGRAM_ALLOWED_USER_IDS", "999, 12345 , ,777")
+    assert telegram.get_telegram_allowed_user_ids() == {"999", "12345", "777"}
+
+
+def test_is_telegram_user_allowed_returns_true_for_allowed_sender(
+    monkeypatch,
+    sample_telegram_update_dict,
+) -> None:
+    monkeypatch.setenv("TELEGRAM_ALLOWED_USER_IDS", "999")
+    update = telegram.TelegramUpdate.model_validate(sample_telegram_update_dict)
+
+    assert telegram.is_telegram_user_allowed(update) is True
+
+
+def test_is_telegram_user_allowed_returns_false_for_disallowed_sender(
+    monkeypatch,
+    sample_telegram_update_dict,
+) -> None:
+    monkeypatch.setenv("TELEGRAM_ALLOWED_USER_IDS", "111")
+    update = telegram.TelegramUpdate.model_validate(sample_telegram_update_dict)
+
+    assert telegram.is_telegram_user_allowed(update) is False
+
+
 @pytest.mark.asyncio
 async def test_fetch_telegram_updates_returns_validated_updates(
     monkeypatch,
@@ -141,6 +166,24 @@ async def test_handle_telegram_update_ignores_unsupported_updates(monkeypatch) -
 
 
 @pytest.mark.asyncio
+async def test_handle_telegram_update_ignores_unauthorized_user(
+    monkeypatch,
+    sample_telegram_update_dict,
+) -> None:
+    update = telegram.TelegramUpdate.model_validate(sample_telegram_update_dict)
+    mock_handle_message = AsyncSpy()
+    mock_send = AsyncSpy()
+    monkeypatch.setattr("app.channels.telegram.handle_message", mock_handle_message)
+    monkeypatch.setattr("app.channels.telegram.send_telegram_reply", mock_send)
+    monkeypatch.setenv("TELEGRAM_ALLOWED_USER_IDS", "111")
+
+    await telegram.handle_telegram_update(update)
+
+    mock_handle_message.assert_not_called()
+    mock_send.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_handle_telegram_update_runs_core_loop_and_sends_reply(
     monkeypatch,
     sample_telegram_update_dict,
@@ -150,6 +193,7 @@ async def test_handle_telegram_update_runs_core_loop_and_sends_reply(
     mock_send = AsyncSpy(result={"ok": True})
     monkeypatch.setattr("app.channels.telegram.handle_message", mock_handle_message)
     monkeypatch.setattr("app.channels.telegram.send_telegram_reply", mock_send)
+    monkeypatch.setenv("TELEGRAM_ALLOWED_USER_IDS", "999")
 
     await telegram.handle_telegram_update(update)
 

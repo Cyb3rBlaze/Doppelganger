@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 
 from app.core.models import Message
 from app.logging_utils import configure_logging
+from app.tools.agent_tools import build_agent_tools
 
 DEFAULT_ASSISTANT_NAME = "Personal Doppelganger"
 DEFAULT_ASSISTANT_MODEL = "gpt-5.4"
@@ -26,15 +27,15 @@ configure_logging()
 logger = logging.getLogger("doppelganger.server.agent")
 
 
-def _load_agents_sdk() -> tuple[Any, Any]:
+def _load_agents_sdk() -> tuple[Any, Any, Any]:
     """Import the OpenAI Agents SDK lazily."""
     try:
-        from agents import Agent, Runner
+        from agents import Agent, Runner, function_tool
     except ImportError as exc:
         raise RuntimeError(
             "The OpenAI Agents SDK is not installed. Run `pip install -e .` first."
         ) from exc
-    return Agent, Runner
+    return Agent, Runner, function_tool
 
 
 @lru_cache
@@ -54,13 +55,14 @@ def load_mind_instructions() -> str:
 @lru_cache
 def get_agent() -> Any:
     """Build and cache the single-agent runtime for the current process."""
-    Agent, _ = _load_agents_sdk()
+    Agent, _, function_tool = _load_agents_sdk()
     name = os.getenv("ASSISTANT_NAME", DEFAULT_ASSISTANT_NAME)
     model = os.getenv("ASSISTANT_MODEL", DEFAULT_ASSISTANT_MODEL)
     return Agent(
         name=name,
         instructions=load_mind_instructions(),
         model=model,
+        tools=build_agent_tools(function_tool),
     )
 
 
@@ -191,7 +193,7 @@ def log_stream_event(event: Any, *, message: Message) -> None:
 
 async def generate_reply(message: Message) -> str:
     """Run one OpenAI Agents SDK turn and return plain text for the caller."""
-    _, Runner = _load_agents_sdk()
+    _, Runner, _ = _load_agents_sdk()
     result = Runner.run_streamed(get_agent(), build_agent_input(message))
     async for event in result.stream_events():
         log_stream_event(event, message=message)

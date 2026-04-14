@@ -82,6 +82,31 @@ You can also use the repo launcher:
 ./start.sh api
 ```
 
+## Environment Variables
+
+Current `.env` variables:
+
+```dotenv
+OPENAI_API_KEY=your-openai-api-key
+ASSISTANT_MODEL=gpt-5.4
+ASSISTANT_NAME=Personal Doppelganger
+
+TELEGRAM_BOT_TOKEN=your-telegram-bot-token
+TELEGRAM_ALLOWED_USER_IDS=123456789
+
+GMAIL_OAUTH_CLIENT_SECRET_PATH=oauth_secret.json
+GMAIL_OAUTH_TOKEN_PATH=.gmail_token.json
+GMAIL_ALLOWED_SENDER_DOMAINS=
+```
+
+Notes:
+
+- `OPENAI_API_KEY` is required for the doppelganger loop.
+- `TELEGRAM_ALLOWED_USER_IDS` is a comma-separated list of Telegram numeric user IDs allowed to receive replies.
+- `GMAIL_OAUTH_CLIENT_SECRET_PATH` should point to your Google OAuth desktop client JSON file.
+- `GMAIL_OAUTH_TOKEN_PATH` is where the local Gmail OAuth token cache will be stored after first login.
+- `GMAIL_ALLOWED_SENDER_DOMAINS` is reserved for Gmail inbound guardrails and can stay empty for now.
+
 ## Test the first loop
 
 Send a request to the local API:
@@ -107,6 +132,7 @@ The first Telegram integration slice uses long polling. There are no webhooks ye
 
 ```dotenv
 TELEGRAM_BOT_TOKEN=your-bot-token
+TELEGRAM_ALLOWED_USER_IDS=123456789,987654321
 ```
 
 2. Install dependencies:
@@ -118,18 +144,39 @@ python -m pip install -e .
 3. Start the Telegram adapter:
 
 ```bash
-python -m app.channels.telegram
-```
-
-Or with the launcher:
-
-```bash
 ./start.sh telegram
 ```
 
 4. Send your bot a plain-text message in Telegram.
 
 The polling adapter uses Telegram `getUpdates` and waits up to 30 seconds per poll before checking again.
+It only responds to Telegram senders whose numeric user IDs are listed in `TELEGRAM_ALLOWED_USER_IDS`.
+
+## Gmail setup
+
+The first Gmail slice now includes:
+
+- local OAuth bootstrap for one Gmail account
+- Gmail API client construction
+- plain-text outbound sending with variable `to`, `cc`, and `bcc`
+
+Add these to `.env`:
+
+```dotenv
+GMAIL_OAUTH_CLIENT_SECRET_PATH=oauth_secret.json
+GMAIL_OAUTH_TOKEN_PATH=.gmail_token.json
+GMAIL_ALLOWED_SENDER_DOMAINS=
+```
+
+When Gmail auth is used for the first time, the local OAuth flow opens a browser window and saves the token JSON to `GMAIL_OAUTH_TOKEN_PATH`.
+
+You can also bootstrap or refresh Gmail auth directly:
+
+```bash
+./start.sh gmail-auth
+```
+
+The Gmail adapter itself is the next step. Right now the Gmail service layer is ready for auth and sending.
 
 ## Run tests
 
@@ -147,6 +194,7 @@ Use the repo-level launcher to start the current entrypoints:
 ./start.sh api
 ./start.sh terminal
 ./start.sh telegram
+./start.sh gmail-auth
 ```
 
 ## Notes

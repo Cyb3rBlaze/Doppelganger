@@ -16,6 +16,7 @@ from app.logging_utils import configure_logging
 
 TELEGRAM_CHANNEL = "telegram"
 TELEGRAM_API_BASE_URL = "https://api.telegram.org"
+TELEGRAM_ALLOWED_USER_IDS_ENV = "TELEGRAM_ALLOWED_USER_IDS"
 DEFAULT_POLL_TIMEOUT_SECONDS = 30
 DEFAULT_ERROR_BACKOFF_SECONDS = 5
 
@@ -135,6 +136,25 @@ def get_telegram_bot_token() -> str:
     return token
 
 
+def get_telegram_allowed_user_ids() -> set[str]:
+    """Return the configured Telegram user IDs allowed to receive replies."""
+    raw_value = os.getenv(TELEGRAM_ALLOWED_USER_IDS_ENV, "")
+    return {
+        user_id.strip()
+        for user_id in raw_value.split(",")
+        if user_id.strip()
+    }
+
+
+def is_telegram_user_allowed(update: TelegramUpdate) -> bool:
+    """Check whether the Telegram sender is allowed to use the bot."""
+    allowed_user_ids = get_telegram_allowed_user_ids()
+    telegram_message = update.message
+    sender = telegram_message.from_user if telegram_message is not None else None
+    sender_id = str(sender.id) if sender is not None else None
+    return sender_id is not None and sender_id in allowed_user_ids
+
+
 def build_telegram_api_url(method: str) -> str:
     """Build the Telegram Bot API URL for a method name."""
     token = get_telegram_bot_token()
@@ -233,6 +253,15 @@ async def handle_telegram_update(update: TelegramUpdate) -> None:
             TELEGRAM_CHANNEL,
             meta,
             "non_text_or_unsupported",
+        )
+        return
+
+    if not is_telegram_user_allowed(update):
+        logger.info(
+            "status=update_ignored queue=done channel=%s meta=%s reason=%s",
+            TELEGRAM_CHANNEL,
+            meta,
+            "unauthorized_user",
         )
         return
 

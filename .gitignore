@@ -3,3 +3,4 @@ __pycache__/
 *.py[cod]
 ai_doppelganger.egg-info/
 .pytest_cache/
+secrets/

@@ -16,11 +16,13 @@ Targets:
   server    Alias for api
   terminal  Start the local terminal adapter
   telegram  Start the Telegram long-polling adapter
+  gmail-auth  Run Gmail OAuth bootstrap and store the token locally
 
 Examples:
   ./start.sh api
   ./start.sh terminal
   ./start.sh telegram
+  ./start.sh gmail-auth
 EOF
 }
 
@@ -38,6 +40,9 @@ case "$CHANNEL" in
     ;;
   telegram)
     exec python -m app.channels.telegram
+    ;;
+  gmail-auth)
+    exec python -m app.tools.gmail_client
     ;;
   *)
     echo "Unknown target: $CHANNEL" >&2

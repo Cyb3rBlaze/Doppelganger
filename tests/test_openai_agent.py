@@ -28,6 +28,14 @@ class FakeRunner:
         return FakeStreamResult([], "final")
 
 
+def fake_function_tool(**tool_kwargs):
+    def decorator(func):
+        func._tool_kwargs = tool_kwargs
+        return func
+
+    return decorator
+
+
 @pytest.fixture(autouse=True)
 def clear_openai_agent_caches():
     openai_agent.get_agent.cache_clear()
@@ -155,8 +163,17 @@ def test_log_stream_event_logs_expected_events(caplog) -> None:
 
 def test_get_agent_uses_env_and_loaded_instructions(monkeypatch) -> None:
     fake_agent_cls = lambda **kwargs: kwargs
-    monkeypatch.setattr(openai_agent, "_load_agents_sdk", lambda: (fake_agent_cls, FakeRunner))
+    monkeypatch.setattr(
+        openai_agent,
+        "_load_agents_sdk",
+        lambda: (fake_agent_cls, FakeRunner, fake_function_tool),
+    )
     monkeypatch.setattr(openai_agent, "load_mind_instructions", lambda: "mind text")
+    monkeypatch.setattr(
+        openai_agent,
+        "build_agent_tools",
+        lambda function_tool: ["gmail-tool"],
+    )
     monkeypatch.setenv("ASSISTANT_NAME", "Mirror")
     monkeypatch.setenv("ASSISTANT_MODEL", "gpt-test")
 
@@ -165,6 +182,7 @@ def test_get_agent_uses_env_and_loaded_instructions(monkeypatch) -> None:
     assert agent["name"] == "Mirror"
     assert agent["instructions"] == "mind text"
     assert agent["model"] == "gpt-test"
+    assert agent["tools"] == ["gmail-tool"]
 
 
 async def test_generate_reply_streams_events_and_returns_string_output(monkeypatch) -> None:
@@ -183,7 +201,11 @@ async def test_generate_reply_streams_events_and_returns_string_output(monkeypat
     monkeypatch.setattr(
         openai_agent,
         "_load_agents_sdk",
-        lambda: (object(), SimpleNamespace(run_streamed=lambda *_args, **_kwargs: stream)),
+        lambda: (
+            object(),
+            SimpleNamespace(run_streamed=lambda *_args, **_kwargs: stream),
+            fake_function_tool,
+        ),
     )
     monkeypatch.setattr(openai_agent, "get_agent", lambda: "agent")
     logged_events: list[object] = []
@@ -206,7 +228,11 @@ async def test_generate_reply_casts_non_string_output(monkeypatch) -> None:
     monkeypatch.setattr(
         openai_agent,
         "_load_agents_sdk",
-        lambda: (object(), SimpleNamespace(run_streamed=lambda *_args, **_kwargs: stream)),
+        lambda: (
+            object(),
+            SimpleNamespace(run_streamed=lambda *_args, **_kwargs: stream),
+            fake_function_tool,
+        ),
     )
     monkeypatch.setattr(openai_agent, "get_agent", lambda: "agent")
 
