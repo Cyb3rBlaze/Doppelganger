@@ -48,7 +48,7 @@ The doppelganger prompt now lives in versioned markdown files under `mind/`.
 Channel adapters should normalize raw channel input into `app.core.models.Message` and then call the core loop directly.
 
 - `app/channels/terminal.py` is a working local adapter that sends terminal input straight into `handle_message(...)`
-- `app/channels/telegram.py` is a stub adapter that normalizes Telegram webhook updates and builds outbound reply payloads
+- `app/channels/telegram.py` runs a Telegram long-polling loop and sends replies back with `sendMessage`
 
 This keeps the doppelganger loop as the internal interface and HTTP as an external transport boundary.
 
@@ -61,6 +61,12 @@ This keeps the doppelganger loop as the internal interface and HTTP as an extern
 pip install -e .
 ```
 
+For tests, install the optional test extras:
+
+```bash
+pip install -e ".[test]"
+```
+
 3. Fill in `.env` with your OpenAI API key.
 4. Start the server:
 
@@ -69,6 +75,12 @@ uvicorn app.main:app --reload
 ```
 
 5. Open the FastAPI docs at `http://127.0.0.1:8000/docs`.
+
+You can also use the repo launcher:
+
+```bash
+./start.sh api
+```
 
 ## Test the first loop
 
@@ -86,6 +98,56 @@ curl -X POST http://127.0.0.1:8000/messages/handle \
 ```
 
 If `OPENAI_API_KEY` is set, the request runs one OpenAI Agents SDK turn and returns the final plain-text answer. If the key is missing, the API returns a clear setup message instead.
+
+## Telegram setup
+
+The first Telegram integration slice uses long polling. There are no webhooks yet.
+
+1. Add your bot token to `.env`:
+
+```dotenv
+TELEGRAM_BOT_TOKEN=your-bot-token
+```
+
+2. Install dependencies:
+
+```bash
+python -m pip install -e .
+```
+
+3. Start the Telegram adapter:
+
+```bash
+python -m app.channels.telegram
+```
+
+Or with the launcher:
+
+```bash
+./start.sh telegram
+```
+
+4. Send your bot a plain-text message in Telegram.
+
+The polling adapter uses Telegram `getUpdates` and waits up to 30 seconds per poll before checking again.
+
+## Run tests
+
+Run the suite with pytest:
+
+```bash
+python -m pytest
+```
+
+## Launcher
+
+Use the repo-level launcher to start the current entrypoints:
+
+```bash
+./start.sh api
+./start.sh terminal
+./start.sh telegram
+```
 
 ## Notes
 
