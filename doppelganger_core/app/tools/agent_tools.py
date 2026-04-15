@@ -6,7 +6,7 @@ from collections.abc import Callable
 from typing import Any
 
 from app.services import internal_documents
-from app.tools import gmail_client
+from app.tools import file_tools, gmail_client
 
 
 def build_agent_tools(function_tool: Callable[..., Any]) -> list[Any]:
@@ -91,4 +91,36 @@ def build_agent_tools(function_tool: Callable[..., Any]) -> list[Any]:
             "count": len(documents),
         }
 
-    return [send_gmail, read_gmail, search_internal_documents]
+    @function_tool(
+        name_override="read_file",
+        description_override=(
+            "Read a project text file. Use this especially for inspecting mind files like "
+            "mind/SOUL.md and mind/DIRECTIVES.md before revising them. "
+            "Access is limited to safe text files within the doppelganger_core project."
+        ),
+    )
+    def read_file(
+        path: str,
+        max_chars: int = file_tools.MAX_READ_CHARS,
+    ) -> dict[str, Any]:
+        """Read a project text file with bounded output."""
+        return file_tools.read_file(path, max_chars=max_chars)
+
+    @function_tool(
+        name_override="write_file",
+        description_override=(
+            "Write or append a project text file. Use this especially for revising "
+            "mind/SOUL.md and mind/DIRECTIVES.md when the user explicitly wants to "
+            "adjust the doppelganger's behavior. "
+            "Access is limited to safe text files within the doppelganger_core project."
+        ),
+    )
+    def write_file(
+        path: str,
+        content: str,
+        append: bool = False,
+    ) -> dict[str, Any]:
+        """Write or append text content to a project file."""
+        return file_tools.write_file(path, content, append=append)
+
+    return [send_gmail, read_gmail, search_internal_documents, read_file, write_file]

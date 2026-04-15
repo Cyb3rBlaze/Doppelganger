@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
+import pytest
+
 from app.tools import agent_tools
 
 
@@ -24,7 +28,7 @@ def test_build_agent_tools_exposes_gmail_send_tool(monkeypatch) -> None:
 
     tools = agent_tools.build_agent_tools(fake_function_tool)
 
-    assert len(tools) == 3
+    assert len(tools) == 5
     send_gmail = tools[0]
     result = send_gmail(
         to=["to@example.com"],
@@ -107,4 +111,51 @@ def test_build_agent_tools_exposes_internal_documents_search_tool(monkeypatch) -
             }
         ],
         "count": 1,
+    }
+
+
+def test_build_agent_tools_exposes_read_file_tool(monkeypatch) -> None:
+    monkeypatch.setattr(
+        agent_tools.file_tools,
+        "read_file",
+        lambda path, max_chars=agent_tools.file_tools.MAX_READ_CHARS: {
+            "status": "ok",
+            "path": "/tmp/test.md",
+            "content": "hello",
+            "truncated": False,
+        },
+    )
+
+    tools = agent_tools.build_agent_tools(fake_function_tool)
+
+    read_file = tools[3]
+    result = read_file(path="mind/SOUL.md", max_chars=500)
+
+    assert read_file._tool_kwargs["name_override"] == "read_file"
+    assert result["content"] == "hello"
+
+
+def test_build_agent_tools_exposes_write_file_tool(monkeypatch) -> None:
+    monkeypatch.setattr(
+        agent_tools.file_tools,
+        "write_file",
+        lambda path, content, append=False: {
+            "status": "ok",
+            "path": "/tmp/test.md",
+            "bytes_written": len(content.encode("utf-8")),
+            "append": append,
+        },
+    )
+
+    tools = agent_tools.build_agent_tools(fake_function_tool)
+
+    write_file = tools[4]
+    result = write_file(path="mind/DIRECTIVES.md", content="updated", append=False)
+
+    assert write_file._tool_kwargs["name_override"] == "write_file"
+    assert result == {
+        "status": "ok",
+        "path": "/tmp/test.md",
+        "bytes_written": len("updated".encode("utf-8")),
+        "append": False,
     }

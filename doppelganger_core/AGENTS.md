@@ -14,6 +14,7 @@
 - Retrieve top internal documents from the pgvector store for knowledge-seeking queries and add them to reply context.
 - Allow explicit Gmail read/send tool calls.
 - Allow explicit internal-document search tool calls for deliberate note lookup.
+- Allow constrained text file read/write tool calls inside the project, especially for `mind/SOUL.md` and `mind/DIRECTIVES.md`.
 
 ## TODOs
 - Inbound Gmail channel adapter.
