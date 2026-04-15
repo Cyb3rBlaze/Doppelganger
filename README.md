@@ -3,7 +3,7 @@
 This repository is a small monorepo with three active subprojects:
 
 - `doppelganger_core/`: the local AI doppelganger runtime
-- `internal_documents_core/`: internal document ingestion into Postgres + pgvector
+- `internal_documents_core/`: adaptive internal document chunk/window ingestion into Postgres + pgvector
 - `postgresql_viewer/`: a read-only web UI for browsing Postgres tables
 
 ## Doppelganger Core

@@ -125,7 +125,7 @@ def search_internal_documents(
     limit: int = DEFAULT_RETRIEVAL_LIMIT,
     postgres_dsn: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Search the internal documents table by cosine similarity."""
+    """Search the internal document chunk table by cosine similarity."""
     resolved_dsn = postgres_dsn or get_internal_documents_dsn()
     if not resolved_dsn:
         return []
@@ -137,13 +137,17 @@ def search_internal_documents(
                 """
                 SELECT
                     document_id,
+                    chunk_id,
                     source_path,
                     source_kind,
                     title,
                     content,
                     metadata,
+                    chunk_index,
+                    window_start_chunk_index,
+                    window_end_chunk_index,
                     1 - (embedding <=> %(embedding)s::vector) AS score
-                FROM documents
+                FROM document_chunks
                 ORDER BY embedding <=> %(embedding)s::vector
                 LIMIT %(limit)s
                 """,
@@ -157,12 +161,16 @@ def search_internal_documents(
     return [
         {
             "document_id": row[0],
-            "source_path": row[1],
-            "source_kind": row[2],
-            "title": row[3],
-            "content": row[4],
-            "metadata": row[5],
-            "score": row[6],
+            "chunk_id": row[1],
+            "source_path": row[2],
+            "source_kind": row[3],
+            "title": row[4],
+            "content": row[5],
+            "metadata": row[6],
+            "chunk_index": row[7],
+            "window_start_chunk_index": row[8],
+            "window_end_chunk_index": row[9],
+            "score": row[10],
         }
         for row in rows
     ]

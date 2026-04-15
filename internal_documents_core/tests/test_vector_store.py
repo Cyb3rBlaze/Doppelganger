@@ -99,10 +99,13 @@ def test_ensure_pgvector_schema_executes_extension_and_table_sql(monkeypatch) ->
     assert stored is True
     assert psycopg.calls == ["postgresql://localhost/internal_docs"]
     assert cursor.executed[0][0] == "CREATE EXTENSION IF NOT EXISTS vector"
-    assert cursor.executed[1][0].strip().startswith("CREATE TABLE IF NOT EXISTS documents")
+    assert cursor.executed[1][0].strip().startswith("CREATE TABLE IF NOT EXISTS document_chunks")
     assert "embedding VECTOR(1536) NOT NULL" in cursor.executed[1][0]
+    assert "chunk_id TEXT NOT NULL" in cursor.executed[1][0]
+    assert "chunk_index INTEGER NOT NULL" in cursor.executed[1][0]
     assert cursor.executed[1][1] is None
     assert cursor.executed[2][0].strip().startswith("CREATE INDEX IF NOT EXISTS")
+    assert cursor.executed[3][0].strip().startswith("CREATE INDEX IF NOT EXISTS")
     assert connection.commits == 1
 
 
@@ -110,6 +113,7 @@ def test_build_create_documents_table_sql_includes_literal_dimension() -> None:
     sql = vector_store.build_create_documents_table_sql(1536)
 
     assert "embedding VECTOR(1536) NOT NULL" in sql
+    assert "CREATE TABLE IF NOT EXISTS document_chunks" in sql
 
 
 def test_get_database_name_from_dsn_extracts_path() -> None:
@@ -162,7 +166,27 @@ def test_format_embedding_literal_returns_pgvector_literal() -> None:
     assert vector_store.format_embedding_literal([0.1, 0.2, 0.3]) == "[0.1,0.2,0.3]"
 
 
-def test_upsert_document_writes_one_document_row(monkeypatch) -> None:
+def test_build_default_document_chunk_wraps_whole_document_as_chunk_zero() -> None:
+    document = vector_store.InternalDocument(
+        document_id="gdoc:abc123",
+        source_path="/tmp/note.gdoc",
+        source_kind="gdoc",
+        title="note",
+        content="hello world",
+        metadata={"doc_id": "abc123"},
+    )
+
+    chunk = vector_store.build_default_document_chunk(document)
+
+    assert chunk.document_id == "gdoc:abc123"
+    assert chunk.chunk_id == "gdoc:abc123:chunk:0"
+    assert chunk.chunk_index == 0
+    assert chunk.window_start_chunk_index == 0
+    assert chunk.window_end_chunk_index == 0
+    assert chunk.content == "hello world"
+
+
+def test_upsert_document_writes_one_chunk_row(monkeypatch) -> None:
     cursor = FakeCursor()
     connection = FakeConnection(cursor)
     psycopg = FakePsycopg(connection)
@@ -188,17 +212,74 @@ def test_upsert_document_writes_one_document_row(monkeypatch) -> None:
     )
 
     assert stored is True
-    assert cursor.executed[0][0].strip().startswith("INSERT INTO documents")
+    assert cursor.executed[0][0].strip().startswith("INSERT INTO document_chunks")
     params = cursor.executed[0][1]
     assert params["document_id"] == "gdoc:abc123"
+    assert params["chunk_id"] == "gdoc:abc123:chunk:0"
     assert params["source_kind"] == "gdoc"
+    assert params["chunk_index"] == 0
+    assert params["window_start_chunk_index"] == 0
+    assert params["window_end_chunk_index"] == 0
     assert params["embedding"] == "[0.1,0.2]"
 
 
-def test_search_documents_returns_ranked_rows(monkeypatch) -> None:
+def test_replace_document_chunks_replaces_all_rows_for_one_document(monkeypatch) -> None:
+    cursor = FakeCursor()
+    connection = FakeConnection(cursor)
+    psycopg = FakePsycopg(connection)
+
+    monkeypatch.setattr(vector_store, "_load_psycopg", lambda: psycopg)
+
+    chunk_record = vector_store.EmbeddedChunkRecord(
+        record=vector_store.DocumentChunkRecord(
+            document_id="gdoc:abc123",
+            chunk_id="gdoc:abc123:chunk:0",
+            source_path="/tmp/note.gdoc",
+            source_kind="gdoc",
+            title="note",
+            content="hello world",
+            metadata={"doc_id": "abc123"},
+            chunk_index=0,
+            window_start_chunk_index=0,
+            window_end_chunk_index=0,
+        ),
+        embedding=[0.1, 0.2],
+    )
+
+    stored = vector_store.replace_document_chunks(
+        "gdoc:abc123",
+        [chunk_record],
+        config=vector_store.VectorStoreConfig(
+            postgres_dsn="postgresql://localhost/internal_docs",
+            embedding_dimension=1536,
+        ),
+    )
+
+    assert stored is True
+    assert cursor.executed[0] == (
+        vector_store.DELETE_DOCUMENT_CHUNKS_SQL,
+        {"document_id": "gdoc:abc123"},
+    )
+    assert cursor.executed[1][0].strip().startswith("INSERT INTO document_chunks")
+    assert connection.commits == 1
+
+
+def test_search_documents_returns_ranked_chunk_rows(monkeypatch) -> None:
     cursor = FakeCursor()
     cursor.fetchall_result = [
-        ("gdoc:abc123", "/tmp/note.gdoc", "gdoc", "note", {"doc_id": "abc123"}, 0.9),
+        (
+            "gdoc:abc123",
+            "gdoc:abc123:chunk:0",
+            "/tmp/note.gdoc",
+            "gdoc",
+            "note",
+            "chunk text",
+            {"doc_id": "abc123"},
+            0,
+            0,
+            0,
+            0.9,
+        ),
     ]
     connection = FakeConnection(cursor)
     psycopg = FakePsycopg(connection)
@@ -217,10 +298,15 @@ def test_search_documents_returns_ranked_rows(monkeypatch) -> None:
     assert results == [
         {
             "document_id": "gdoc:abc123",
+            "chunk_id": "gdoc:abc123:chunk:0",
             "source_path": "/tmp/note.gdoc",
             "source_kind": "gdoc",
             "title": "note",
+            "content": "chunk text",
             "metadata": {"doc_id": "abc123"},
+            "chunk_index": 0,
+            "window_start_chunk_index": 0,
+            "window_end_chunk_index": 0,
             "score": 0.9,
         }
     ]

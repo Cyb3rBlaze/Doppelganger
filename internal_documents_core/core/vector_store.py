@@ -27,50 +27,75 @@ if FALLBACK_DOTENV_PATH.exists():
 ENABLE_PGVECTOR_EXTENSION_SQL = "CREATE EXTENSION IF NOT EXISTS vector"
 
 CREATE_DOCUMENTS_TABLE_SQL_TEMPLATE = """
-CREATE TABLE IF NOT EXISTS documents (
+CREATE TABLE IF NOT EXISTS document_chunks (
     id BIGSERIAL PRIMARY KEY,
     document_id TEXT NOT NULL,
+    chunk_id TEXT NOT NULL,
     source_path TEXT NOT NULL,
     source_kind TEXT NOT NULL,
     title TEXT NULL,
     content TEXT NOT NULL,
     metadata JSONB NOT NULL DEFAULT '{{}}'::jsonb,
+    chunk_index INTEGER NOT NULL,
+    window_start_chunk_index INTEGER NOT NULL,
+    window_end_chunk_index INTEGER NOT NULL,
     embedding VECTOR({embedding_dimension}) NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (document_id)
+    UNIQUE (chunk_id)
 )
 """
 
 CREATE_DOCUMENTS_LOOKUP_INDEX_SQL = """
-CREATE INDEX IF NOT EXISTS documents_document_id_idx
-ON documents (document_id)
+CREATE INDEX IF NOT EXISTS document_chunks_document_id_idx
+ON document_chunks (document_id)
+"""
+
+CREATE_CHUNKS_ORDER_INDEX_SQL = """
+CREATE INDEX IF NOT EXISTS document_chunks_chunk_index_idx
+ON document_chunks (document_id, chunk_index)
+"""
+
+DELETE_DOCUMENT_CHUNKS_SQL = """
+DELETE FROM document_chunks
+WHERE document_id = %(document_id)s
 """
 
 UPSERT_DOCUMENT_SQL = """
-INSERT INTO documents (
+INSERT INTO document_chunks (
     document_id,
+    chunk_id,
     source_path,
     source_kind,
     title,
     content,
     metadata,
+    chunk_index,
+    window_start_chunk_index,
+    window_end_chunk_index,
     embedding
 ) VALUES (
     %(document_id)s,
+    %(chunk_id)s,
     %(source_path)s,
     %(source_kind)s,
     %(title)s,
     %(content)s,
     %(metadata)s::jsonb,
+    %(chunk_index)s,
+    %(window_start_chunk_index)s,
+    %(window_end_chunk_index)s,
     %(embedding)s::vector
 )
-ON CONFLICT (document_id) DO UPDATE SET
+ON CONFLICT (chunk_id) DO UPDATE SET
     source_path = EXCLUDED.source_path,
     source_kind = EXCLUDED.source_kind,
     title = EXCLUDED.title,
     content = EXCLUDED.content,
     metadata = EXCLUDED.metadata,
+    chunk_index = EXCLUDED.chunk_index,
+    window_start_chunk_index = EXCLUDED.window_start_chunk_index,
+    window_end_chunk_index = EXCLUDED.window_end_chunk_index,
     embedding = EXCLUDED.embedding,
     updated_at = NOW()
 """
@@ -78,12 +103,17 @@ ON CONFLICT (document_id) DO UPDATE SET
 SEARCH_DOCUMENTS_SQL = """
 SELECT
     document_id,
+    chunk_id,
     source_path,
     source_kind,
     title,
+    content,
     metadata,
+    chunk_index,
+    window_start_chunk_index,
+    window_end_chunk_index,
     1 - (embedding <=> %(embedding)s::vector) AS score
-FROM documents
+FROM document_chunks
 ORDER BY embedding <=> %(embedding)s::vector
 LIMIT %(limit)s
 """
@@ -95,6 +125,30 @@ class VectorStoreConfig:
 
     postgres_dsn: str
     embedding_dimension: int
+
+
+@dataclass(frozen=True)
+class DocumentChunkRecord:
+    """One stored chunk/window row for the internal document vector store."""
+
+    document_id: str
+    chunk_id: str
+    source_path: str
+    source_kind: str
+    title: str
+    content: str
+    metadata: dict[str, Any]
+    chunk_index: int
+    window_start_chunk_index: int
+    window_end_chunk_index: int
+
+
+@dataclass(frozen=True)
+class EmbeddedChunkRecord:
+    """One stored chunk/window row plus its embedding."""
+
+    record: DocumentChunkRecord
+    embedding: list[float]
 
 
 def _load_psycopg() -> Any:
@@ -183,7 +237,7 @@ def ensure_database_exists(*, config: VectorStoreConfig | None = None) -> bool:
 
 
 def build_create_documents_table_sql(embedding_dimension: int) -> str:
-    """Render the documents table DDL with a validated vector dimension."""
+    """Render the chunk table DDL with a validated vector dimension."""
     if embedding_dimension <= 0:
         raise RuntimeError("Embedding dimension must be greater than zero.")
     return CREATE_DOCUMENTS_TABLE_SQL_TEMPLATE.format(embedding_dimension=embedding_dimension)
@@ -199,6 +253,7 @@ def ensure_pgvector_schema(*, config: VectorStoreConfig | None = None) -> bool:
             cursor.execute(ENABLE_PGVECTOR_EXTENSION_SQL)
             cursor.execute(build_create_documents_table_sql(resolved_config.embedding_dimension))
             cursor.execute(CREATE_DOCUMENTS_LOOKUP_INDEX_SQL)
+            cursor.execute(CREATE_CHUNKS_ORDER_INDEX_SQL)
         connection.commit()
     return True
 
@@ -208,13 +263,49 @@ def format_embedding_literal(embedding: list[float]) -> str:
     return "[" + ",".join(str(value) for value in embedding) + "]"
 
 
-def upsert_document(
+def build_document_chunk_record(
     document: InternalDocument,
+    *,
+    chunk_id: str,
+    chunk_index: int,
+    window_start_chunk_index: int,
+    window_end_chunk_index: int,
+    content: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> DocumentChunkRecord:
+    """Build one chunk/window record from a normalized source document."""
+    return DocumentChunkRecord(
+        document_id=document.document_id,
+        chunk_id=chunk_id,
+        source_path=document.source_path,
+        source_kind=document.source_kind,
+        title=document.title,
+        content=document.content if content is None else content,
+        metadata=document.metadata if metadata is None else metadata,
+        chunk_index=chunk_index,
+        window_start_chunk_index=window_start_chunk_index,
+        window_end_chunk_index=window_end_chunk_index,
+    )
+
+
+def build_default_document_chunk(document: InternalDocument) -> DocumentChunkRecord:
+    """Build the temporary one-chunk wrapper used before adaptive chunking lands."""
+    return build_document_chunk_record(
+        document,
+        chunk_id=f"{document.document_id}:chunk:0",
+        chunk_index=0,
+        window_start_chunk_index=0,
+        window_end_chunk_index=0,
+    )
+
+
+def upsert_document_chunk(
+    chunk: DocumentChunkRecord,
     embedding: list[float],
     *,
     config: VectorStoreConfig | None = None,
 ) -> bool:
-    """Insert or update one embedded document in Postgres."""
+    """Insert or update one embedded document chunk in Postgres."""
     resolved_config = config or get_vector_store_config()
     psycopg = _load_psycopg()
     with psycopg.connect(resolved_config.postgres_dsn) as connection:
@@ -222,17 +313,65 @@ def upsert_document(
             cursor.execute(
                 UPSERT_DOCUMENT_SQL,
                 {
-                    "document_id": document.document_id,
-                    "source_path": document.source_path,
-                    "source_kind": document.source_kind,
-                    "title": document.title,
-                    "content": document.content,
-                    "metadata": json.dumps(document.metadata, default=str),
+                    "document_id": chunk.document_id,
+                    "chunk_id": chunk.chunk_id,
+                    "source_path": chunk.source_path,
+                    "source_kind": chunk.source_kind,
+                    "title": chunk.title,
+                    "content": chunk.content,
+                    "metadata": json.dumps(chunk.metadata, default=str),
+                    "chunk_index": chunk.chunk_index,
+                    "window_start_chunk_index": chunk.window_start_chunk_index,
+                    "window_end_chunk_index": chunk.window_end_chunk_index,
                     "embedding": format_embedding_literal(embedding),
                 },
             )
         connection.commit()
     return True
+
+
+def replace_document_chunks(
+    document_id: str,
+    chunk_records: list[EmbeddedChunkRecord],
+    *,
+    config: VectorStoreConfig | None = None,
+) -> bool:
+    """Replace all stored chunks for one document in a single transaction."""
+    resolved_config = config or get_vector_store_config()
+    psycopg = _load_psycopg()
+    with psycopg.connect(resolved_config.postgres_dsn) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(DELETE_DOCUMENT_CHUNKS_SQL, {"document_id": document_id})
+            for chunk_record in chunk_records:
+                chunk = chunk_record.record
+                cursor.execute(
+                    UPSERT_DOCUMENT_SQL,
+                    {
+                        "document_id": chunk.document_id,
+                        "chunk_id": chunk.chunk_id,
+                        "source_path": chunk.source_path,
+                        "source_kind": chunk.source_kind,
+                        "title": chunk.title,
+                        "content": chunk.content,
+                        "metadata": json.dumps(chunk.metadata, default=str),
+                        "chunk_index": chunk.chunk_index,
+                        "window_start_chunk_index": chunk.window_start_chunk_index,
+                        "window_end_chunk_index": chunk.window_end_chunk_index,
+                        "embedding": format_embedding_literal(chunk_record.embedding),
+                    },
+                )
+        connection.commit()
+    return True
+
+
+def upsert_document(
+    document: InternalDocument,
+    embedding: list[float],
+    *,
+    config: VectorStoreConfig | None = None,
+) -> bool:
+    """Compatibility wrapper that stores a whole document as chunk 0 for now."""
+    return upsert_document_chunk(build_default_document_chunk(document), embedding, config=config)
 
 
 def search_documents(
@@ -241,7 +380,7 @@ def search_documents(
     limit: int = 5,
     config: VectorStoreConfig | None = None,
 ) -> list[dict[str, Any]]:
-    """Run a simple pgvector similarity search over stored documents."""
+    """Run a simple pgvector similarity search over stored document chunks."""
     resolved_config = config or get_vector_store_config()
     psycopg = _load_psycopg()
     with psycopg.connect(resolved_config.postgres_dsn) as connection:
@@ -257,11 +396,16 @@ def search_documents(
     return [
         {
             "document_id": row[0],
-            "source_path": row[1],
-            "source_kind": row[2],
-            "title": row[3],
-            "metadata": row[4],
-            "score": row[5],
+            "chunk_id": row[1],
+            "source_path": row[2],
+            "source_kind": row[3],
+            "title": row[4],
+            "content": row[5],
+            "metadata": row[6],
+            "chunk_index": row[7],
+            "window_start_chunk_index": row[8],
+            "window_end_chunk_index": row[9],
+            "score": row[10],
         }
         for row in rows
     ]

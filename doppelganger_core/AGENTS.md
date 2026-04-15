@@ -11,7 +11,7 @@
 - Pass messages through one doppelganger loop.
 - Return a plain-text response through the originating channel.
 - Store daily session history and rolling summaries in Postgres.
-- Retrieve top internal documents from the pgvector store for knowledge-seeking queries and add them to reply context.
+- Retrieve top internal chunk/window matches from the pgvector store for knowledge-seeking queries and add them to reply context.
 - Allow explicit Gmail read/send tool calls.
 - Allow explicit internal-document search tool calls for deliberate note lookup.
 - Allow constrained text file inspection and targeted-edit tool calls inside the project, especially for `mind/SOUL.md` and `mind/DIRECTIVES.md`.
