@@ -94,6 +94,7 @@ def build_agent_input(
     current_session_history: list[dict[str, Any]] | None = None,
     current_session_summary: str | None = None,
     previous_session_summaries: list[str] | None = None,
+    retrieved_documents: list[dict[str, Any]] | None = None,
 ) -> str:
     """Render a normalized message into a compact text input for the agent."""
     conversation_id = message.conversation_id or "unknown"
@@ -113,6 +114,23 @@ def build_agent_input(
 
     if current_session_summary:
         sections.append(f"Current session summary so far:\n{current_session_summary}")
+
+    if retrieved_documents:
+        document_lines = []
+        for document in retrieved_documents:
+            document_lines.append(
+                "\n".join(
+                    [
+                        f"- Title: {document.get('title') or 'Untitled'}",
+                        f"  Source path: {document.get('source_path') or 'unknown'}",
+                        f"  Similarity score: {document.get('score')}",
+                        f"  Content:\n{document.get('content') or ''}",
+                    ]
+                )
+            )
+        sections.append(
+            "Relevant retrieved internal documents:\n" + "\n\n".join(document_lines)
+        )
 
     history_for_context = _select_reply_context_history(
         message,
@@ -309,6 +327,7 @@ async def generate_reply(
     current_session_history: list[dict[str, Any]] | None = None,
     current_session_summary: str | None = None,
     previous_session_summaries: list[str] | None = None,
+    retrieved_documents: list[dict[str, Any]] | None = None,
 ) -> str:
     """Run one OpenAI Agents SDK turn and return plain text for the caller."""
     _, Runner, _ = _load_agents_sdk()
@@ -319,6 +338,7 @@ async def generate_reply(
             current_session_history=current_session_history,
             current_session_summary=current_session_summary,
             previous_session_summaries=previous_session_summaries,
+            retrieved_documents=retrieved_documents,
         ),
     )
     async for event in result.stream_events():

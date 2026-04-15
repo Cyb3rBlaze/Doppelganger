@@ -24,7 +24,7 @@ def test_build_agent_tools_exposes_gmail_send_tool(monkeypatch) -> None:
 
     tools = agent_tools.build_agent_tools(fake_function_tool)
 
-    assert len(tools) == 2
+    assert len(tools) == 3
     send_gmail = tools[0]
     result = send_gmail(
         to=["to@example.com"],
@@ -70,5 +70,41 @@ def test_build_agent_tools_exposes_gmail_read_tool(monkeypatch) -> None:
     assert result == {
         "status": "ok",
         "messages": [{"id": "msg-1", "subject": "Hello", "body_text": "Body"}],
+        "count": 1,
+    }
+
+
+def test_build_agent_tools_exposes_internal_documents_search_tool(monkeypatch) -> None:
+    monkeypatch.setattr(
+        agent_tools.internal_documents,
+        "search_internal_documents_for_query",
+        lambda query, limit=3: [
+            {
+                "document_id": "gdoc:abc123",
+                "title": "Investing Notes",
+                "source_path": "/docs/investing.gdoc",
+                "score": 0.91,
+                "content": "Key investing principles",
+            }
+        ],
+    )
+
+    tools = agent_tools.build_agent_tools(fake_function_tool)
+
+    search_internal_documents = tools[2]
+    result = search_internal_documents(query="investing notes", max_results=3)
+
+    assert search_internal_documents._tool_kwargs["name_override"] == "search_internal_documents"
+    assert result == {
+        "status": "ok",
+        "documents": [
+            {
+                "document_id": "gdoc:abc123",
+                "title": "Investing Notes",
+                "source_path": "/docs/investing.gdoc",
+                "score": 0.91,
+                "content": "Key investing principles",
+            }
+        ],
         "count": 1,
     }

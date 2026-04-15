@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 
 from app.core.models import Message, MessageResponse
-from app.services import message_history
+from app.services import internal_documents, message_history
 from app.services.openai_agent import generate_reply, generate_session_summary
 
 logger = logging.getLogger("doppelganger.server")
@@ -26,6 +26,7 @@ async def handle_message(message: Message) -> MessageResponse:
     current_session_history: list[dict] = []
     current_session_summary: str | None = None
     previous_session_summaries: list[str] = []
+    retrieved_documents: list[dict] = []
 
     if history_enabled:
         try:
@@ -48,11 +49,24 @@ async def handle_message(message: Message) -> MessageResponse:
                 message.message_id,
             )
 
+    if internal_documents.looks_like_knowledge_seeking_query(message):
+        try:
+            retrieved_documents = await internal_documents.retrieve_internal_document_context(message)
+        except Exception:
+            logger.exception(
+                "status=internal_documents_retrieval_failed channel=%s user_id=%s conversation_id=%s message_id=%s",
+                message.channel,
+                message.user_id,
+                message.conversation_id,
+                message.message_id,
+            )
+
     response_text = await generate_reply(
         message,
         current_session_history=current_session_history,
         current_session_summary=current_session_summary,
         previous_session_summaries=previous_session_summaries,
+        retrieved_documents=retrieved_documents,
     )
     if history_enabled:
         try:

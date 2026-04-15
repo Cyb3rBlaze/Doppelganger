@@ -2,27 +2,37 @@
 
 ## Goal
 
-Build the smallest inspectable end-to-end doppelganger loop:
+Keep the doppelganger loop inspectable even as more context sources are layered in:
 
-`inbound message -> normalize -> doppelganger run -> plain-text reply`
+`inbound message -> normalize -> gather context -> doppelganger run -> plain-text reply`
 
-## Decisions
+## Current Decisions
 
 - Keep one internal `Message` model in `app/core/models.py`.
 - Let channel-specific payloads normalize into `Message` before the doppelganger loop.
 - Keep orchestration in `app/core/assistant.py`.
 - Keep the OpenAI Agents SDK integration isolated in `app/services/openai_agent.py`.
-- Run one SDK turn per inbound message and return `final_output` as plain text.
+- Keep retrieval and persistence in separate services instead of baking them into channel adapters.
 
-## Why this shape
+## Current Context Sources
+
+The reply path now combines:
+
+- the current inbound message
+- previous session summaries
+- the current session summary
+- recent current-session message history
+- top retrieved internal documents from the pgvector store
+
+## Why This Shape
 
 - It keeps the doppelganger loop channel-agnostic.
-- It avoids mixing Telegram or Gmail details into the doppelganger logic.
+- It avoids mixing Telegram, Gmail, or internal-doc implementation details into the reply boundary.
 - It keeps the OpenAI-specific integration small enough to replace or expand later.
+- It keeps retrieval and memory best-effort instead of making them transport concerns.
 
-## Next likely steps
+## Current Gaps
 
-- Add channel adapters under `app/channels/` that normalize raw input into `Message`.
-- Add a Telegram adapter that converts updates into `Message`.
-- Add a Gmail adapter that converts email threads into `Message`.
-- Add conversation state once one-turn replies feel solid.
+- Gmail is available as tools, but not yet as a live inbound adapter.
+- Internal-doc retrieval is still one embedding per document, not chunk-level retrieval.
+- Memory is still shallow relative to a full hierarchy.

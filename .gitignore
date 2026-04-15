@@ -12,6 +12,8 @@ internal_documents_core/*.egg-info/
 internal_documents_core/.pytest_cache/
 internal_documents_core/vector_store_exports/
 internal_documents_core/.DS_Store
+internal_documents_core/secrets/
+internal_documents_core/skipped_documents.txt
 
 postgresql_viewer/node_modules/
 postgresql_viewer/.pnp

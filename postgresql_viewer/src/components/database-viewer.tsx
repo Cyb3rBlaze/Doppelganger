@@ -27,24 +27,69 @@ type PreviewPayload = {
   rows: Record<string, unknown>[];
 };
 
+const MAX_STRING_PREVIEW = 180;
+const MAX_OBJECT_PREVIEW = 220;
+const MAX_ARRAY_PREVIEW_ITEMS = 6;
+const EXPANDED_PATH_COLUMNS = new Set(["source_path"]);
+
 function tableKey(table: Pick<TableEntry, "schema" | "name">) {
   return `${table.schema}.${table.name}`;
 }
 
-function formatValue(value: unknown) {
+function truncateText(value: string, maxLength: number) {
+  if (value.length <= maxLength) {
+    return value;
+  }
+
+  return `${value.slice(0, maxLength - 1)}…`;
+}
+
+function formatArrayValue(value: unknown[]) {
+  if (value.length === 0) {
+    return "[]";
+  }
+
+  const previewItems = value.slice(0, MAX_ARRAY_PREVIEW_ITEMS).map((item) => {
+    if (typeof item === "number") {
+      return Number(item.toFixed(6)).toString();
+    }
+
+    return truncateText(formatValue(item), 32);
+  });
+
+  const suffix = value.length > MAX_ARRAY_PREVIEW_ITEMS ? ", …" : "";
+  return `Array(${value.length}) [${previewItems.join(", ")}${suffix}]`;
+}
+
+function formatObjectValue(value: Record<string, unknown>) {
+  return truncateText(JSON.stringify(value), MAX_OBJECT_PREVIEW);
+}
+
+function formatValue(value: unknown, columnName?: string) {
   if (value === null) {
     return "null";
   }
 
   if (typeof value === "string") {
-    return value;
+    if (columnName && EXPANDED_PATH_COLUMNS.has(columnName)) {
+      return value;
+    }
+    return truncateText(value, MAX_STRING_PREVIEW);
   }
 
   if (typeof value === "number" || typeof value === "boolean") {
     return String(value);
   }
 
-  return JSON.stringify(value);
+  if (Array.isArray(value)) {
+    return formatArrayValue(value);
+  }
+
+  if (typeof value === "object") {
+    return formatObjectValue(value as Record<string, unknown>);
+  }
+
+  return truncateText(String(value), MAX_OBJECT_PREVIEW);
 }
 
 export function DatabaseViewer() {
@@ -255,7 +300,16 @@ export function DatabaseViewer() {
                       <tr key={`${tableKey(selectedTable)}-${rowIndex}`}>
                         {preview.columns.map((column) => (
                           <td key={`${rowIndex}-${column.name}`}>
-                            <code>{formatValue(row[column.name])}</code>
+                            <code
+                              className={
+                                column.name === "source_path"
+                                  ? styles.pathCode
+                                  : styles.cellCode
+                              }
+                              title={String(row[column.name] ?? "")}
+                            >
+                              {formatValue(row[column.name], column.name)}
+                            </code>
                           </td>
                         ))}
                       </tr>

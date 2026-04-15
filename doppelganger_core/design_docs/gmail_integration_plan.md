@@ -1,5 +1,21 @@
 # Gmail Integration Plan
 
+## Current Status
+
+Implemented today:
+
+- local OAuth bootstrap
+- Gmail client construction
+- plain-text outbound send with `to`, `cc`, and `bcc`
+- read/list helpers
+- `read_gmail` and `send_gmail` agent tools
+
+Not implemented yet:
+
+- inbound Gmail channel adapter
+- thread-to-`Message` normalization wired into the main loop
+- Gmail polling or watch/webhook ingestion
+
 ## Goal
 
 Add a Gmail channel adapter that can:
@@ -11,7 +27,7 @@ Add a Gmail channel adapter that can:
 
 ## V0 Shape
 
-For the first Gmail slice, we will support:
+For the first full Gmail channel slice, we will support:
 
 - local OAuth for one Gmail account
 - listing and reading messages from that account
@@ -52,7 +68,7 @@ These are enough for:
 
 We should avoid `gmail.modify` unless we intentionally add mailbox mutations later.
 
-## Proposed Files
+## Files
 
 - `app/channels/gmail.py`
   Gmail adapter entrypoints and normalization helpers
@@ -85,9 +101,11 @@ The Gmail adapter will likely need a few Gmail-only models/helpers:
 
 These should stay in the Gmail adapter/service layer and not leak into `app/core/`.
 
-## Implementation Phases
+## Remaining Phases
 
 ### Phase 1: Auth and client bootstrap
+
+Status: done
 
 Build:
 
@@ -115,6 +133,8 @@ Tests:
 
 ### Phase 2: Outbound send
 
+Status: done
+
 Build:
 
 - a helper to compose a plain-text MIME email
@@ -135,6 +155,8 @@ Tests:
 - sending with no recipients raises validation error
 
 ### Phase 3: Inbound read/list
+
+Status: done at the service/tool layer
 
 Build:
 
@@ -161,6 +183,8 @@ Tests:
 - empty/unsupported bodies are ignored safely
 
 ### Phase 4: Gmail adapter
+
+Status: next
 
 Build:
 
@@ -194,22 +218,11 @@ Planned guardrails:
 - do not send if all recipient lists are empty
 - do not silently mutate mailbox state
 
-## Recommended First Coding Slice
+## Next Deliverable
 
-Start with outbound send first, then inbound read.
+The next useful implementation step should produce:
 
-Why:
-
-- it is smaller than inbound parsing
-- `to` / `cc` / `bcc` support is clearly bounded
-- the MIME composition logic is easy to test thoroughly
-- once send works, reply flows become much simpler
-
-## First Deliverable
-
-The first implementation step should produce:
-
-- `app/tools/gmail_client.py`
-- tests for Gmail auth bootstrap
-- tests for MIME composition and send payload generation
-- no live network dependency in the default test suite
+- `app/channels/gmail.py`
+- normalization from Gmail message/thread shape into `Message`
+- adapter tests for inbound processing
+- a decision on whether Gmail should poll locally or stay tool-only until a later slice

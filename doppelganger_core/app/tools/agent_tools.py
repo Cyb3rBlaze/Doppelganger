@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+from app.services import internal_documents
 from app.tools import gmail_client
 
 
@@ -67,4 +68,27 @@ def build_agent_tools(function_tool: Callable[..., Any]) -> list[Any]:
             "count": len(messages),
         }
 
-    return [send_gmail, read_gmail]
+    @function_tool(
+        name_override="search_internal_documents",
+        description_override=(
+            "Search the user's internal notes and documents by semantic similarity. "
+            "Use this when you deliberately want to inspect private notes, documents, "
+            "or prior written material beyond the automatic lightweight retrieval."
+        ),
+    )
+    def search_internal_documents(
+        query: str,
+        max_results: int = 3,
+    ) -> dict[str, Any]:
+        """Search the internal documents pgvector store with an explicit query."""
+        documents = internal_documents.search_internal_documents_for_query(
+            query,
+            limit=max_results,
+        )
+        return {
+            "status": "ok",
+            "documents": documents,
+            "count": len(documents),
+        }
+
+    return [send_gmail, read_gmail, search_internal_documents]

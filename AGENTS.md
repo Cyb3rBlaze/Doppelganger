@@ -15,3 +15,4 @@
 - Do not add app code directly at the root.
 - Keep generated artifacts out of the repository root and out of subproject trees.
 - Update the root `README.md` and root `.gitignore` when subproject structure changes.
+- Keep each subproject's own `README.md` and `AGENTS.md` aligned with the real implementation state.

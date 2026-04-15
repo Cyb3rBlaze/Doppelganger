@@ -115,6 +115,34 @@ def test_build_agent_input_includes_history_and_prior_summaries() -> None:
     assert "- [outbound] hi there" in input_text
 
 
+def test_build_agent_input_includes_retrieved_documents() -> None:
+    message = Message(
+        channel="api",
+        user_id="anshul",
+        text="latest message",
+        conversation_id="thread-1",
+        message_id="msg-2",
+    )
+
+    input_text = openai_agent.build_agent_input(
+        message,
+        retrieved_documents=[
+            {
+                "title": "Investing Notes",
+                "source_path": "/docs/investing.gdoc",
+                "score": 0.91,
+                "content": "Key investing principles",
+            }
+        ],
+    )
+
+    assert "Relevant retrieved internal documents:" in input_text
+    assert "Title: Investing Notes" in input_text
+    assert "Source path: /docs/investing.gdoc" in input_text
+    assert "Similarity score: 0.91" in input_text
+    assert "Content:\nKey investing principles" in input_text
+
+
 def test_build_agent_input_excludes_duplicate_latest_inbound_from_history() -> None:
     message = Message(
         channel="api",

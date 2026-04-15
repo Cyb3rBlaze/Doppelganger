@@ -27,6 +27,8 @@ postgresql://user:password@host:5432/database?sslmode=require
 - Lists tables, partitioned tables, views, materialized views, and foreign tables
 - Shows column counts for each object
 - Previews up to 100 rows for the selected object
+- Compresses long cell values like large text fields, JSON, and vectors into compact previews
+- Keeps important path-like fields such as `source_path` visible
 - Supports common hosted Postgres URLs that require `sslmode=require`
 
 ## Notes

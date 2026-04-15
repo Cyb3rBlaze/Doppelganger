@@ -259,14 +259,30 @@
   font-weight: 500;
 }
 
-.dataTable td code {
-  display: inline-block;
-  max-width: 420px;
+.cellCode {
+  max-width: 320px;
   white-space: pre-wrap;
   word-break: break-word;
   font-family: var(--font-geist-mono), monospace;
   font-size: 0.86rem;
   color: #432b19;
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.pathCode {
+  display: inline-block;
+  min-width: 360px;
+  max-width: 720px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 0.86rem;
+  color: #432b19;
+  line-height: 1.45;
 }
 
 .emptyState {

@@ -4,7 +4,7 @@
 
 Add the first persistence layer for conversation history and session tracking using Postgres.
 
-This slice stores raw message events and feeds the current session history back into model context.
+This slice stores raw message events and feeds session memory back into model context.
 
 ## Scope
 
@@ -18,10 +18,9 @@ For now we want:
 
 We do not want yet:
 
-- memory summarization
-- semantic retrieval
 - multi-table abstractions
 - ORM-heavy modeling
+- a full long-term memory hierarchy
 
 ## Table Shape
 
@@ -41,7 +40,7 @@ Suggested columns:
 
 ## Session Rule
 
-Create a new session per day.
+Create a new session per local server day.
 
 For this first slice, a session is derived from:
 
@@ -118,11 +117,12 @@ Add tests for:
 
 The current session's `message_history` is read back from Postgres and passed into the agent input as context.
 
-Older sessions will rely on `session_summary`.
+Older sessions rely on `session_summary`.
 
-In this step:
+Current behavior:
 
-- recent current session history is used as live context
+- recent current-session history is used as live context
 - the current session summary is also used as live context
 - after each reply, the app refreshes the current session summary from the latest session summary plus recent updates
 - when a new daily session starts, older `session_summary` values are available as prior-session context
+- internal document retrieval is separate from this table and is layered into the prompt alongside memory, not stored here

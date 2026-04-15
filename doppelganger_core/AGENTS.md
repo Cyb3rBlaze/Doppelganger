@@ -2,18 +2,23 @@
 
 ## Project Intent
 - Build an AI doppelganger for a single user.
-- Support Telegram and Gmail as the first channels.
+- Support Telegram first as a live inbound channel and keep Gmail available as a tool-backed capability.
 - Run locally on a FastAPI server.
 
-## V0 Scope
-- Accept inbound messages from Telegram and Gmail.
+## Current Scope
+- Accept inbound messages from API, terminal, and Telegram.
 - Normalize incoming messages into one internal format.
 - Pass messages through one doppelganger loop.
 - Return a plain-text response through the originating channel.
+- Store daily session history and rolling summaries in Postgres.
+- Retrieve top internal documents from the pgvector store for knowledge-seeking queries and add them to reply context.
+- Allow explicit Gmail read/send tool calls.
+- Allow explicit internal-document search tool calls for deliberate note lookup.
 
 ## TODOs
-- Additional external tools or side-effecting actions beyond the current Gmail send tool.
-- Long-term memory beyond what is required to answer within a conversation.
+- Inbound Gmail channel adapter.
+- Additional external tools or side-effecting actions beyond the current Gmail tools.
+- Long-term memory beyond daily-session summaries and internal-doc retrieval.
 - Memory hierarchy
 
 ## Architecture Direction
@@ -24,10 +29,11 @@
 
 ## Suggested Layout
 - `app/main.py`: FastAPI entrypoint
-- `app/api/`: webhook and health endpoints
-- `app/channels/`: Telegram and Gmail adapters
-- `app/core/`: message models, orchestration, doppelganger loop
-- `app/services/`: LLM client and shared services
+- `app/api/`: API and health endpoints
+- `app/channels/`: terminal and Telegram adapters
+- `app/core/`: message models and orchestration
+- `app/services/`: LLM client, memory, and retrieval services
+- `app/tools/`: external tool integrations like Gmail
 - `design_docs/`: architecture and implementation notes
 
 ## Development Rules
@@ -38,4 +44,4 @@
 - Keep secrets in environment variables, never in code.
 
 ## Near-Term Goal
-- Build a clean end-to-end loop: inbound message -> normalize -> doppelganger response -> outbound reply
+- Keep the current end-to-end loop stable while tightening Gmail, retrieval quality, and memory quality.

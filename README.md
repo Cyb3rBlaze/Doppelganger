@@ -1,27 +1,47 @@
 # AI Workspace
 
-This repo now has three top-level cores:
+This repository is a small monorepo with three active subprojects:
 
-- `doppelganger_core/`: the AI doppelganger app
-- `internal_documents_core/`: internal document ingestion and vector DB population
-- `postgresql_viewer/`: web app to easily visualize postgres table contents
+- `doppelganger_core/`: the local AI doppelganger runtime
+- `internal_documents_core/`: internal document ingestion into Postgres + pgvector
+- `postgresql_viewer/`: a read-only web UI for browsing Postgres tables
 
-## Run The Doppelganger
+## Doppelganger Core
+
+Run the backend:
 
 ```bash
 cd doppelganger_core
 ./start.sh api
 ```
 
+Other entrypoints:
+
+```bash
+./start.sh terminal
+./start.sh telegram
+./start.sh gmail-auth
+```
+
 ## Internal Documents Core
+
+Install and ingest documents:
 
 ```bash
 cd internal_documents_core
 python -m pip install -e ".[test]"
-python -m internal_documents_core.ingest --help
+./ingest.sh ingest "/Users/anshul/My Drive/Notes + Ideas"
 ```
 
-## Run The PostgreSQL Viewer
+Run vector search:
+
+```bash
+./ingest.sh search "notes about investing"
+```
+
+## PostgreSQL Viewer
+
+Run the viewer:
 
 ```bash
 cd postgresql_viewer
