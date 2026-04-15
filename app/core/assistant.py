@@ -6,7 +6,7 @@ import logging
 
 from app.core.models import Message, MessageResponse
 from app.services import message_history
-from app.services.openai_agent import generate_reply
+from app.services.openai_agent import generate_reply, generate_session_summary
 
 logger = logging.getLogger("doppelganger.server")
 
@@ -22,19 +22,61 @@ async def handle_message(message: Message) -> MessageResponse:
         message.text,
         message.metadata,
     )
-    if message_history.is_configured():
-        await message_history.append_message_event_async(
-            message=message,
-            direction="inbound",
-            text=message.text,
-        )
-    response_text = await generate_reply(message)
-    if message_history.is_configured():
-        await message_history.append_message_event_async(
-            message=message,
-            direction="outbound",
-            text=response_text,
-        )
+    history_enabled = message_history.is_configured()
+    current_session_history: list[dict] = []
+    current_session_summary: str | None = None
+    previous_session_summaries: list[str] = []
+
+    if history_enabled:
+        try:
+            await message_history.append_message_event_async(
+                message=message,
+                direction="inbound",
+                text=message.text,
+            )
+            current_session_history = await message_history.get_current_session_history_async(message)
+            current_session_summary = await message_history.get_current_session_summary_async(message)
+            previous_session_summaries = await message_history.get_previous_session_summaries_async(
+                message
+            )
+        except Exception:
+            logger.exception(
+                "status=history_load_failed channel=%s user_id=%s conversation_id=%s message_id=%s",
+                message.channel,
+                message.user_id,
+                message.conversation_id,
+                message.message_id,
+            )
+
+    response_text = await generate_reply(
+        message,
+        current_session_history=current_session_history,
+        current_session_summary=current_session_summary,
+        previous_session_summaries=previous_session_summaries,
+    )
+    if history_enabled:
+        try:
+            await message_history.append_message_event_async(
+                message=message,
+                direction="outbound",
+                text=response_text,
+            )
+            updated_session_history = await message_history.get_current_session_history_async(message)
+            session_summary = await generate_session_summary(
+                message,
+                existing_session_summary=current_session_summary,
+                current_session_history=updated_session_history,
+            )
+            if session_summary:
+                await message_history.update_session_summary_async(message, session_summary)
+        except Exception:
+            logger.exception(
+                "status=history_update_failed channel=%s user_id=%s conversation_id=%s message_id=%s",
+                message.channel,
+                message.user_id,
+                message.conversation_id,
+                message.message_id,
+            )
     logger.info(
         "status=responded channel=%s user_id=%s conversation_id=%s message_id=%s reply=%r",
         message.channel,

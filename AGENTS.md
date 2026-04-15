@@ -12,7 +12,7 @@
 - Return a plain-text response through the originating channel.
 
 ## TODOs
-- External tools or side-effecting actions beyond replying.
+- Additional external tools or side-effecting actions beyond the current Gmail send tool.
 - Long-term memory beyond what is required to answer within a conversation.
 - Memory hierarchy
 

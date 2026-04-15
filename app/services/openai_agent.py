@@ -17,6 +17,9 @@ from app.tools.agent_tools import build_agent_tools
 
 DEFAULT_ASSISTANT_NAME = "Personal Doppelganger"
 DEFAULT_ASSISTANT_MODEL = "gpt-5.4"
+DEFAULT_SUMMARY_AGENT_NAME = "Session Summarizer"
+DEFAULT_REPLY_HISTORY_EVENT_LIMIT = 8
+DEFAULT_SUMMARY_HISTORY_EVENT_LIMIT = 6
 MIND_DIR = Path(__file__).resolve().parents[2] / "mind"
 MIND_FILES = ("SOUL.md", "DIRECTIVES.md")
 DOTENV_PATH = Path(__file__).resolve().parents[2] / ".env"
@@ -66,18 +69,127 @@ def get_agent() -> Any:
     )
 
 
-def build_agent_input(message: Message) -> str:
+@lru_cache
+def get_summary_agent() -> Any:
+    """Build and cache a lightweight agent for session summarization."""
+    Agent, _, _ = _load_agents_sdk()
+    model = os.getenv("ASSISTANT_MODEL", DEFAULT_ASSISTANT_MODEL)
+    return Agent(
+        name=DEFAULT_SUMMARY_AGENT_NAME,
+        instructions=(
+            "You summarize one session of conversation for an AI doppelganger. "
+            "Write a concise factual summary of the important context, preferences, "
+            "plans, commitments, people, and open loops. "
+            "Do not invent facts. Keep it under 180 words. "
+            "Return plain text only."
+        ),
+        model=model,
+        tools=[],
+    )
+
+
+def build_agent_input(
+    message: Message,
+    *,
+    current_session_history: list[dict[str, Any]] | None = None,
+    current_session_summary: str | None = None,
+    previous_session_summaries: list[str] | None = None,
+) -> str:
     """Render a normalized message into a compact text input for the agent."""
     conversation_id = message.conversation_id or "unknown"
     message_id = message.message_id or "unknown"
-    return (
+    sections = [
         "You are replying to one inbound message.\n"
         f"Channel: {message.channel}\n"
         f"User ID: {message.user_id}\n"
         f"Conversation ID: {conversation_id}\n"
         f"Message ID: {message_id}\n"
         f"Message:\n{message.text}"
+    ]
+
+    if previous_session_summaries:
+        summary_lines = "\n".join(f"- {summary}" for summary in previous_session_summaries)
+        sections.append(f"Relevant summaries from previous sessions:\n{summary_lines}")
+
+    if current_session_summary:
+        sections.append(f"Current session summary so far:\n{current_session_summary}")
+
+    history_for_context = _select_reply_context_history(
+        message,
+        current_session_history=current_session_history,
     )
+    if history_for_context:
+        history_lines = []
+        for event in history_for_context:
+            direction = event.get("direction", "unknown")
+            event_text = event.get("text", "")
+            history_lines.append(f"- [{direction}] {event_text}")
+        sections.append("Recent current session history:\n" + "\n".join(history_lines))
+
+    return "\n\n".join(sections)
+
+
+def build_session_summary_input(
+    message: Message,
+    *,
+    existing_session_summary: str | None = None,
+    current_session_history: list[dict[str, Any]] | None = None,
+) -> str:
+    """Render the current session history into a summary prompt."""
+    conversation_id = message.conversation_id or "unknown"
+    history_lines: list[str] = []
+    recent_events = _select_summary_context_history(current_session_history=current_session_history)
+    for event in recent_events:
+        direction = event.get("direction", "unknown")
+        event_text = event.get("text", "")
+        history_lines.append(f"- [{direction}] {event_text}")
+
+    sections = [
+        "Summarize this daily conversation session for future context.\n"
+        f"Channel: {message.channel}\n"
+        f"User ID: {message.user_id}\n"
+        f"Conversation ID: {conversation_id}\n"
+    ]
+    if existing_session_summary:
+        sections.append(f"Existing session summary:\n{existing_session_summary}")
+    history_block = "\n".join(history_lines) if history_lines else "- [unknown] No new messages."
+    sections.append("Recent session updates:\n" + history_block)
+    return "\n\n".join(sections)
+
+
+def _select_reply_context_history(
+    message: Message,
+    *,
+    current_session_history: list[dict[str, Any]] | None = None,
+    limit: int = DEFAULT_REPLY_HISTORY_EVENT_LIMIT,
+) -> list[dict[str, Any]]:
+    """Trim current session history for reply context and avoid duplicating the latest inbound."""
+    if not current_session_history:
+        return []
+
+    trimmed_history = list(current_session_history[-limit:])
+    if not trimmed_history:
+        return trimmed_history
+
+    last_event = trimmed_history[-1]
+    if (
+        last_event.get("direction") == "inbound"
+        and last_event.get("text") == message.text
+        and str(last_event.get("message_id") or "unknown") == (message.message_id or "unknown")
+    ):
+        return trimmed_history[:-1]
+    return trimmed_history
+
+
+def _select_summary_context_history(
+    *,
+    current_session_history: list[dict[str, Any]] | None = None,
+    limit: int = DEFAULT_SUMMARY_HISTORY_EVENT_LIMIT,
+) -> list[dict[str, Any]]:
+    """Trim session history for rolling summary refreshes."""
+    if not current_session_history:
+        return []
+    return list(current_session_history[-limit:])
 
 
 def _truncate(value: Any, limit: int = 300) -> str:
@@ -191,13 +303,51 @@ def log_stream_event(event: Any, *, message: Message) -> None:
         )
 
 
-async def generate_reply(message: Message) -> str:
+async def generate_reply(
+    message: Message,
+    *,
+    current_session_history: list[dict[str, Any]] | None = None,
+    current_session_summary: str | None = None,
+    previous_session_summaries: list[str] | None = None,
+) -> str:
     """Run one OpenAI Agents SDK turn and return plain text for the caller."""
     _, Runner, _ = _load_agents_sdk()
-    result = Runner.run_streamed(get_agent(), build_agent_input(message))
+    result = Runner.run_streamed(
+        get_agent(),
+        build_agent_input(
+            message,
+            current_session_history=current_session_history,
+            current_session_summary=current_session_summary,
+            previous_session_summaries=previous_session_summaries,
+        ),
+    )
     async for event in result.stream_events():
         log_stream_event(event, message=message)
     final_output = result.final_output
     if isinstance(final_output, str):
         return final_output
     return str(final_output)
+
+
+async def generate_session_summary(
+    message: Message,
+    *,
+    existing_session_summary: str | None = None,
+    current_session_history: list[dict[str, Any]] | None = None,
+) -> str:
+    """Generate a concise summary for the current daily session."""
+    _, Runner, _ = _load_agents_sdk()
+    result = Runner.run_streamed(
+        get_summary_agent(),
+        build_session_summary_input(
+            message,
+            existing_session_summary=existing_session_summary,
+            current_session_history=current_session_history,
+        ),
+    )
+    async for event in result.stream_events():
+        log_stream_event(event, message=message)
+    final_output = result.final_output
+    if isinstance(final_output, str):
+        return final_output.strip()
+    return str(final_output).strip()

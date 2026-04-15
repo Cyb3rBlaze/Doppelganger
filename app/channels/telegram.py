@@ -307,8 +307,16 @@ async def run_polling_loop(
                 timeout_seconds=timeout_seconds,
             )
             for update in updates:
-                await handle_telegram_update(update)
                 next_offset = update.update_id + 1
+                try:
+                    await handle_telegram_update(update)
+                except Exception:
+                    logger.exception(
+                        "status=update_failed channel=%s update_id=%s next_offset=%s",
+                        TELEGRAM_CHANNEL,
+                        update.update_id,
+                        next_offset,
+                    )
         except Exception as exc:
             logger.info(
                 "status=error channel=%s next_offset=%s error=%r",

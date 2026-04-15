@@ -117,11 +117,18 @@ When `POSTGRES_DSN` is set, the app stores raw conversation history in Postgres.
 Current shape:
 
 - one row per daily session
-- session key derived from `channel`, `user_id`, `conversation_id`, and UTC date
+- session key derived from `channel`, `user_id`, `conversation_id`, and the local server date
+- rolling `session_summary` stored per session
 - `message_history` stored as a JSONB list of dicts
 - inbound and outbound events appended in order
 
-This is raw storage only for now. Previous messages are not yet injected back into model context.
+The agent now uses:
+- recent current-session history
+- the current session summary so far
+- recent prior-session summaries
+
+After each reply, the app regenerates the current session summary and stores it on the same daily row.
+When a new daily session starts, recent prior-session summaries are included as cross-session context.
 
 ## Test the first loop
 

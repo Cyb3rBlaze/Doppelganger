@@ -218,3 +218,33 @@ async def test_run_polling_loop_logs_errors_and_retries(monkeypatch) -> None:
         await telegram.run_polling_loop(timeout_seconds=1)
 
     mock_sleep.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_run_polling_loop_advances_offset_before_processing_failures(monkeypatch) -> None:
+    updates = [telegram.TelegramUpdate(update_id=101, message=None)]
+    fetch_updates_spy = AsyncSpy(side_effect=[updates, asyncio.CancelledError()])
+    handled_offsets: list[int | None] = []
+
+    async def fake_handle_telegram_update(update):
+        _ = update
+        raise RuntimeError("boom")
+
+    async def fake_fetch_telegram_updates(*, offset=None, timeout_seconds=30):
+        _ = timeout_seconds
+        handled_offsets.append(offset)
+        return await fetch_updates_spy(offset=offset, timeout_seconds=timeout_seconds)
+
+    monkeypatch.setattr(
+        "app.channels.telegram.fetch_telegram_updates",
+        fake_fetch_telegram_updates,
+    )
+    monkeypatch.setattr(
+        "app.channels.telegram.handle_telegram_update",
+        fake_handle_telegram_update,
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await telegram.run_polling_loop(timeout_seconds=1)
+
+    assert handled_offsets == [None, 102]

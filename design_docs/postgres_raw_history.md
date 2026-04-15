@@ -4,16 +4,17 @@
 
 Add the first persistence layer for conversation history and session tracking using Postgres.
 
-This first slice stores raw message events only. It does not yet feed prior messages back into model context.
+This slice stores raw message events and feeds the current session history back into model context.
 
 ## Scope
 
 For now we want:
 
 - one Postgres table
-- one row per raw inbound or outbound message
+- one row per daily session
 - a derived session identifier that rolls over daily
-- enough fields to reconstruct the raw thread later
+- raw message history preserved as a JSONB list of dicts
+- a rolling plain-text summary stored on each session row
 
 We do not want yet:
 
@@ -33,6 +34,7 @@ Suggested columns:
 - `channel text not null`
 - `user_id text not null`
 - `conversation_id text null`
+- `session_summary text null`
 - `message_history jsonb not null default '[]'::jsonb`
 - `created_at timestamptz not null default now()`
 - `updated_at timestamptz not null default now()`
@@ -46,7 +48,7 @@ For this first slice, a session is derived from:
 - `channel`
 - `user_id`
 - `conversation_id` if present, otherwise `"unknown"`
-- current UTC date
+- current local server date
 
 That produces a stable daily session key like:
 
@@ -89,6 +91,7 @@ Keep bootstrap simple:
 
 - one helper to create the table if it does not exist
 - one helper to append a message event into the session row
+- one helper to update `session_summary` on the current session row
 
 No migration framework yet.
 
@@ -111,6 +114,15 @@ Add tests for:
 - assistant storing inbound and outbound events in the right order
 - graceful behavior when Postgres is not configured
 
-## Next Step After This
+## Context Use
 
-Once raw persistence is stable, the next step is reading recent session history back out and using it as model context.
+The current session's `message_history` is read back from Postgres and passed into the agent input as context.
+
+Older sessions will rely on `session_summary`.
+
+In this step:
+
+- recent current session history is used as live context
+- the current session summary is also used as live context
+- after each reply, the app refreshes the current session summary from the latest session summary plus recent updates
+- when a new daily session starts, older `session_summary` values are available as prior-session context

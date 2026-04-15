@@ -9,8 +9,10 @@ from app.services import message_history
 
 
 class FakeCursor:
-    def __init__(self) -> None:
+    def __init__(self, *, fetchone_result=None, fetchall_result=None) -> None:
         self.executed: list[tuple[str, object | None]] = []
+        self.fetchone_result = fetchone_result
+        self.fetchall_result = fetchall_result or []
 
     def __enter__(self) -> "FakeCursor":
         return self
@@ -20,6 +22,12 @@ class FakeCursor:
 
     def execute(self, sql: str, params=None) -> None:
         self.executed.append((sql, params))
+
+    def fetchone(self):
+        return self.fetchone_result
+
+    def fetchall(self):
+        return self.fetchall_result
 
 
 class FakeConnection:
@@ -119,6 +127,11 @@ def test_append_message_event_initializes_schema_and_upserts(monkeypatch) -> Non
         "_utc_now",
         lambda: datetime(2026, 4, 14, 12, 0, tzinfo=timezone.utc),
     )
+    monkeypatch.setattr(
+        message_history,
+        "_local_today",
+        lambda: date(2026, 4, 14),
+    )
 
     stored = message_history.append_message_event(
         message=Message(
@@ -138,9 +151,149 @@ def test_append_message_event_initializes_schema_and_upserts(monkeypatch) -> Non
         "postgresql://localhost/doppelganger",
     ]
     assert cursor.executed[0][0].strip().startswith("CREATE TABLE IF NOT EXISTS message_sessions")
-    assert cursor.executed[1][0].strip().startswith("INSERT INTO message_sessions")
-    row = cursor.executed[1][1]
+    assert cursor.executed[1][0].strip().startswith("ALTER TABLE message_sessions")
+    assert cursor.executed[2][0].strip().startswith("INSERT INTO message_sessions")
+    row = cursor.executed[2][1]
     assert row["session_id"] == "api:anshul:thread-1:2026-04-14"
     assert row["conversation_id"] == "thread-1"
     assert '"direction": "inbound"' in row["message_history"]
     assert '"text": "hello"' in row["message_history"]
+
+
+def test_get_current_session_history_returns_stored_events(monkeypatch) -> None:
+    message_history.ensure_schema.cache_clear()
+    cursor = FakeCursor(fetchone_result=([{"direction": "inbound", "text": "hello"}],))
+    connection = FakeConnection(cursor)
+    psycopg = FakePsycopg(connection)
+
+    monkeypatch.setenv("POSTGRES_DSN", "postgresql://localhost/doppelganger")
+    monkeypatch.setattr(message_history, "_load_psycopg", lambda: psycopg)
+    monkeypatch.setattr(
+        message_history,
+        "_utc_now",
+        lambda: datetime(2026, 4, 14, 12, 0, tzinfo=timezone.utc),
+    )
+    monkeypatch.setattr(
+        message_history,
+        "_local_today",
+        lambda: date(2026, 4, 14),
+    )
+
+    history = message_history.get_current_session_history(
+        Message(
+            channel="api",
+            user_id="anshul",
+            text="hello",
+            conversation_id="thread-1",
+        )
+    )
+
+    assert history == [{"direction": "inbound", "text": "hello"}]
+    assert "SELECT message_history" in cursor.executed[2][0]
+
+
+def test_get_previous_session_summaries_returns_recent_non_empty_summaries(monkeypatch) -> None:
+    message_history.ensure_schema.cache_clear()
+    cursor = FakeCursor(fetchall_result=[("summary one",), ("summary two",)])
+    connection = FakeConnection(cursor)
+    psycopg = FakePsycopg(connection)
+
+    monkeypatch.setenv("POSTGRES_DSN", "postgresql://localhost/doppelganger")
+    monkeypatch.setattr(message_history, "_load_psycopg", lambda: psycopg)
+    monkeypatch.setattr(
+        message_history,
+        "_utc_now",
+        lambda: datetime(2026, 4, 14, 12, 0, tzinfo=timezone.utc),
+    )
+    monkeypatch.setattr(
+        message_history,
+        "_local_today",
+        lambda: date(2026, 4, 14),
+    )
+
+    summaries = message_history.get_previous_session_summaries(
+        Message(
+            channel="api",
+            user_id="anshul",
+            text="hello",
+            conversation_id="thread-1",
+        )
+    )
+
+    assert summaries == ["summary one", "summary two"]
+    assert "SELECT session_summary" in cursor.executed[2][0]
+
+
+def test_get_current_session_summary_returns_stored_text(monkeypatch) -> None:
+    message_history.ensure_schema.cache_clear()
+    cursor = FakeCursor(fetchone_result=("summary one",))
+    connection = FakeConnection(cursor)
+    psycopg = FakePsycopg(connection)
+
+    monkeypatch.setenv("POSTGRES_DSN", "postgresql://localhost/doppelganger")
+    monkeypatch.setattr(message_history, "_load_psycopg", lambda: psycopg)
+    monkeypatch.setattr(
+        message_history,
+        "_local_today",
+        lambda: date(2026, 4, 14),
+    )
+
+    summary = message_history.get_current_session_summary(
+        Message(
+            channel="api",
+            user_id="anshul",
+            text="hello",
+            conversation_id="thread-1",
+        )
+    )
+
+    assert summary == "summary one"
+    assert "SELECT session_summary" in cursor.executed[2][0]
+
+
+def test_update_session_summary_persists_summary_text(monkeypatch) -> None:
+    message_history.ensure_schema.cache_clear()
+    cursor = FakeCursor()
+    connection = FakeConnection(cursor)
+    psycopg = FakePsycopg(connection)
+
+    monkeypatch.setenv("POSTGRES_DSN", "postgresql://localhost/doppelganger")
+    monkeypatch.setattr(message_history, "_load_psycopg", lambda: psycopg)
+    monkeypatch.setattr(
+        message_history,
+        "_utc_now",
+        lambda: datetime(2026, 4, 14, 12, 0, tzinfo=timezone.utc),
+    )
+    monkeypatch.setattr(
+        message_history,
+        "_local_today",
+        lambda: date(2026, 4, 14),
+    )
+
+    updated = message_history.update_session_summary(
+        Message(
+            channel="api",
+            user_id="anshul",
+            text="hello",
+            conversation_id="thread-1",
+        ),
+        "Session summary text",
+    )
+
+    assert updated is True
+    assert cursor.executed[2][0].strip().startswith("UPDATE message_sessions")
+    params = cursor.executed[2][1]
+    assert params["session_id"] == "api:anshul:thread-1:2026-04-14"
+    assert params["session_summary"] == "Session summary text"
+
+
+def test_build_session_id_uses_local_calendar_day(monkeypatch) -> None:
+    monkeypatch.setattr(message_history, "_local_today", lambda: date(2026, 4, 14))
+    message = Message(
+        channel="api",
+        user_id="anshul",
+        text="hello",
+        conversation_id="thread-1",
+    )
+
+    assert message_history.build_session_id(message) == "api:anshul:thread-1:2026-04-14"

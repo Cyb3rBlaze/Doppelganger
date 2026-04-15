@@ -39,9 +39,11 @@ def fake_function_tool(**tool_kwargs):
 @pytest.fixture(autouse=True)
 def clear_openai_agent_caches():
     openai_agent.get_agent.cache_clear()
+    openai_agent.get_summary_agent.cache_clear()
     openai_agent.load_mind_instructions.cache_clear()
     yield
     openai_agent.get_agent.cache_clear()
+    openai_agent.get_summary_agent.cache_clear()
     openai_agent.load_mind_instructions.cache_clear()
 
 
@@ -83,6 +85,98 @@ def test_build_agent_input_includes_message_fields() -> None:
     assert "Conversation ID: thread-1" in input_text
     assert "Message ID: msg-1" in input_text
     assert "Message:\nhello" in input_text
+
+
+def test_build_agent_input_includes_history_and_prior_summaries() -> None:
+    message = Message(
+        channel="api",
+        user_id="anshul",
+        text="latest message",
+        conversation_id="thread-1",
+        message_id="msg-2",
+    )
+
+    input_text = openai_agent.build_agent_input(
+        message,
+        current_session_history=[
+            {"direction": "inbound", "text": "hello"},
+            {"direction": "outbound", "text": "hi there"},
+        ],
+        current_session_summary="User is planning travel.",
+        previous_session_summaries=["Earlier session was about planning travel."],
+    )
+
+    assert "Relevant summaries from previous sessions:" in input_text
+    assert "Earlier session was about planning travel." in input_text
+    assert "Current session summary so far:" in input_text
+    assert "User is planning travel." in input_text
+    assert "Recent current session history:" in input_text
+    assert "- [inbound] hello" in input_text
+    assert "- [outbound] hi there" in input_text
+
+
+def test_build_agent_input_excludes_duplicate_latest_inbound_from_history() -> None:
+    message = Message(
+        channel="api",
+        user_id="anshul",
+        text="latest message",
+        conversation_id="thread-1",
+        message_id="msg-2",
+    )
+
+    input_text = openai_agent.build_agent_input(
+        message,
+        current_session_history=[
+            {"direction": "inbound", "text": "hello", "message_id": "msg-1"},
+            {"direction": "inbound", "text": "latest message", "message_id": "msg-2"},
+        ],
+    )
+
+    assert "- [inbound] hello" in input_text
+    assert "- [inbound] latest message" not in input_text
+
+
+def test_build_session_summary_input_includes_existing_summary_and_recent_updates() -> None:
+    message = Message(
+        channel="telegram",
+        user_id="6891176979",
+        text="latest message",
+        conversation_id="thread-1",
+    )
+
+    input_text = openai_agent.build_session_summary_input(
+        message,
+        existing_session_summary="User is coordinating an email draft.",
+        current_session_history=[
+            {"direction": "inbound", "text": "Can you draft an email?"},
+            {"direction": "outbound", "text": "Yes, who should it go to?"},
+        ],
+    )
+
+    assert "Summarize this daily conversation session for future context." in input_text
+    assert "Channel: telegram" in input_text
+    assert "Conversation ID: thread-1" in input_text
+    assert "Existing session summary:" in input_text
+    assert "User is coordinating an email draft." in input_text
+    assert "Recent session updates:" in input_text
+    assert "- [inbound] Can you draft an email?" in input_text
+    assert "- [outbound] Yes, who should it go to?" in input_text
+
+
+def test_select_summary_context_history_trims_to_recent_events() -> None:
+    selected = openai_agent._select_summary_context_history(
+        current_session_history=[
+            {"direction": "inbound", "text": "1"},
+            {"direction": "outbound", "text": "2"},
+            {"direction": "inbound", "text": "3"},
+        ],
+        limit=2,
+    )
+
+    assert selected == [
+        {"direction": "outbound", "text": "2"},
+        {"direction": "inbound", "text": "3"},
+    ]
 
 
 def test_truncate_handles_strings_and_objects() -> None:
@@ -185,6 +279,23 @@ def test_get_agent_uses_env_and_loaded_instructions(monkeypatch) -> None:
     assert agent["tools"] == ["gmail-tool"]
 
 
+def test_get_summary_agent_uses_summary_settings(monkeypatch) -> None:
+    fake_agent_cls = lambda **kwargs: kwargs
+    monkeypatch.setattr(
+        openai_agent,
+        "_load_agents_sdk",
+        lambda: (fake_agent_cls, FakeRunner, fake_function_tool),
+    )
+    monkeypatch.setenv("ASSISTANT_MODEL", "gpt-summary")
+
+    agent = openai_agent.get_summary_agent()
+
+    assert agent["name"] == "Session Summarizer"
+    assert "concise factual summary" in agent["instructions"]
+    assert agent["model"] == "gpt-summary"
+    assert agent["tools"] == []
+
+
 async def test_generate_reply_streams_events_and_returns_string_output(monkeypatch) -> None:
     message = Message(channel="api", user_id="anshul", text="hello")
     stream = FakeStreamResult(
@@ -215,7 +326,10 @@ async def test_generate_reply_streams_events_and_returns_string_output(monkeypat
         lambda event, *, message: logged_events.append((event, message)),
     )
 
-    result = await openai_agent.generate_reply(message)
+    result = await openai_agent.generate_reply(
+        message,
+        current_session_summary="summary",
+    )
 
     assert result == "hello back"
     assert len(logged_events) == 1
@@ -239,3 +353,26 @@ async def test_generate_reply_casts_non_string_output(monkeypatch) -> None:
     result = await openai_agent.generate_reply(message)
 
     assert result == "{'reply': 'hello'}"
+
+
+async def test_generate_session_summary_returns_trimmed_output(monkeypatch) -> None:
+    message = Message(channel="api", user_id="anshul", text="hello")
+    stream = FakeStreamResult([], " summary text \n")
+
+    monkeypatch.setattr(
+        openai_agent,
+        "_load_agents_sdk",
+        lambda: (
+            object(),
+            SimpleNamespace(run_streamed=lambda *_args, **_kwargs: stream),
+            fake_function_tool,
+        ),
+    )
+    monkeypatch.setattr(openai_agent, "get_summary_agent", lambda: "summary-agent")
+
+    result = await openai_agent.generate_session_summary(
+        message,
+        current_session_history=[{"direction": "inbound", "text": "hello"}],
+    )
+
+    assert result == "summary text"

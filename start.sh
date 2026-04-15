@@ -7,6 +7,30 @@ cd "$SCRIPT_DIR"
 
 CHANNEL="${1:-}"
 
+resolve_python() {
+  if [[ -n "${CONDA_PREFIX:-}" && -x "${CONDA_PREFIX}/bin/python" ]]; then
+    printf '%s\n' "${CONDA_PREFIX}/bin/python"
+    return
+  fi
+  if [[ -n "${VIRTUAL_ENV:-}" && -x "${VIRTUAL_ENV}/bin/python" ]]; then
+    printf '%s\n' "${VIRTUAL_ENV}/bin/python"
+    return
+  fi
+  if command -v python >/dev/null 2>&1; then
+    command -v python
+    return
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    command -v python3
+    return
+  fi
+
+  echo "No Python interpreter found on PATH." >&2
+  exit 1
+}
+
+PYTHON_BIN="$(resolve_python)"
+
 print_usage() {
   cat <<'EOF'
 Usage: ./start.sh <target>
@@ -33,16 +57,16 @@ fi
 
 case "$CHANNEL" in
   api|server)
-    exec uvicorn app.main:app --reload
+    exec "$PYTHON_BIN" -m uvicorn app.main:app --reload
     ;;
   terminal)
-    exec python -m app.channels.terminal
+    exec "$PYTHON_BIN" -m app.channels.terminal
     ;;
   telegram)
-    exec python -m app.channels.telegram
+    exec "$PYTHON_BIN" -m app.channels.telegram
     ;;
   gmail-auth)
-    exec python -m app.tools.gmail_client
+    exec "$PYTHON_BIN" -m app.tools.gmail_client
     ;;
   *)
     echo "Unknown target: $CHANNEL" >&2
