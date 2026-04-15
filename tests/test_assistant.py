@@ -36,3 +36,31 @@ async def test_handle_message_logs_received_and_responded(monkeypatch, caplog) -
     joined = "\n".join(caplog.messages)
     assert "status=received" in joined
     assert "status=responded" in joined
+
+
+async def test_handle_message_appends_inbound_and_outbound_history(monkeypatch) -> None:
+    message = Message(channel="api", user_id="anshul", text="hello")
+    appended_events: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        "app.core.assistant.generate_reply",
+        AsyncSpy(result="hi there"),
+    )
+    monkeypatch.setattr("app.core.assistant.message_history.is_configured", lambda: True)
+
+    async def fake_append_message_event_async(*, message, direction, text, metadata=None):
+        _ = message, metadata
+        appended_events.append((direction, text))
+        return True
+
+    monkeypatch.setattr(
+        "app.core.assistant.message_history.append_message_event_async",
+        fake_append_message_event_async,
+    )
+
+    response = await handle_message(message)
+
+    assert response.reply_text == "hi there"
+    assert appended_events == [
+        ("inbound", "hello"),
+        ("outbound", "hi there"),
+    ]

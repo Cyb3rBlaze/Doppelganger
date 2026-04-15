@@ -97,6 +97,8 @@ TELEGRAM_ALLOWED_USER_IDS=123456789
 GMAIL_OAUTH_CLIENT_SECRET_PATH=oauth_secret.json
 GMAIL_OAUTH_TOKEN_PATH=.gmail_token.json
 GMAIL_ALLOWED_SENDER_DOMAINS=
+
+POSTGRES_DSN=postgresql://postgres:postgres@localhost:5432/doppelganger
 ```
 
 Notes:
@@ -106,6 +108,20 @@ Notes:
 - `GMAIL_OAUTH_CLIENT_SECRET_PATH` should point to your Google OAuth desktop client JSON file.
 - `GMAIL_OAUTH_TOKEN_PATH` is where the local Gmail OAuth token cache will be stored after first login.
 - `GMAIL_ALLOWED_SENDER_DOMAINS` is reserved for Gmail inbound guardrails and can stay empty for now.
+- `POSTGRES_DSN` enables raw conversation history persistence in Postgres.
+
+## Raw History
+
+When `POSTGRES_DSN` is set, the app stores raw conversation history in Postgres.
+
+Current shape:
+
+- one row per daily session
+- session key derived from `channel`, `user_id`, `conversation_id`, and UTC date
+- `message_history` stored as a JSONB list of dicts
+- inbound and outbound events appended in order
+
+This is raw storage only for now. Previous messages are not yet injected back into model context.
 
 ## Test the first loop
 
