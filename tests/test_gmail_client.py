@@ -83,15 +83,35 @@ class FakeSendRequest:
         return self.response
 
 
+class FakeExecuteRequest:
+    def __init__(self, response) -> None:
+        self.response = response
+
+    def execute(self):
+        return self.response
+
+
 class FakeMessagesResource:
     def __init__(self) -> None:
         self.user_id = None
         self.body = None
+        self.get_calls: list[dict[str, str]] = []
+        self.list_calls: list[dict[str, object]] = []
+        self.get_responses: dict[str, dict[str, object]] = {}
+        self.list_response: dict[str, object] = {"messages": []}
 
     def send(self, *, userId: str, body: dict[str, str]) -> FakeSendRequest:
         self.user_id = userId
         self.body = body
         return FakeSendRequest({"id": "sent-123"})
+
+    def get(self, *, userId: str, id: str, format: str) -> FakeExecuteRequest:
+        self.get_calls.append({"userId": userId, "id": id, "format": format})
+        return FakeExecuteRequest(self.get_responses[id])
+
+    def list(self, *, userId: str, q, maxResults: int) -> FakeExecuteRequest:
+        self.list_calls.append({"userId": userId, "q": q, "maxResults": maxResults})
+        return FakeExecuteRequest(self.list_response)
 
 
 class FakeUsersResource:
@@ -299,3 +319,117 @@ def test_send_gmail_message_calls_messages_send_with_me_user_id() -> None:
     assert messages_resource.user_id == "me"
     assert isinstance(messages_resource.body, dict)
     assert "raw" in messages_resource.body
+
+
+def test_normalize_gmail_message_extracts_headers_and_plain_text() -> None:
+    payload = {
+        "headers": [
+            {"name": "From", "value": "sender@example.com"},
+            {"name": "To", "value": "me@example.com"},
+            {"name": "Cc", "value": "friend@example.com"},
+            {"name": "Subject", "value": "Hello"},
+        ],
+        "mimeType": "multipart/alternative",
+        "parts": [
+            {
+                "mimeType": "text/plain",
+                "body": {
+                    "data": base64.urlsafe_b64encode(b"Plain body").decode("utf-8").rstrip("=")
+                },
+            }
+        ],
+    }
+
+    normalized = gmail_client.normalize_gmail_message(
+        {
+            "id": "msg-1",
+            "threadId": "thread-1",
+            "labelIds": ["INBOX"],
+            "snippet": "Plain body",
+            "internalDate": "1713123456",
+            "payload": payload,
+        }
+    )
+
+    assert normalized == {
+        "id": "msg-1",
+        "threadId": "thread-1",
+        "labelIds": ["INBOX"],
+        "snippet": "Plain body",
+        "internalDate": "1713123456",
+        "from": "sender@example.com",
+        "to": "me@example.com",
+        "cc": "friend@example.com",
+        "subject": "Hello",
+        "body_text": "Plain body",
+    }
+
+
+def test_get_gmail_message_fetches_full_message_by_id() -> None:
+    messages_resource = FakeMessagesResource()
+    messages_resource.get_responses["msg-1"] = {
+        "id": "msg-1",
+        "threadId": "thread-1",
+        "payload": {
+            "headers": [{"name": "Subject", "value": "Hello"}],
+            "mimeType": "text/plain",
+            "body": {
+                "data": base64.urlsafe_b64encode(b"Body").decode("utf-8").rstrip("=")
+            },
+        },
+    }
+    service = FakeGmailService(messages_resource)
+
+    message = gmail_client.get_gmail_message("msg-1", service=service)
+
+    assert message["id"] == "msg-1"
+    assert message["subject"] == "Hello"
+    assert message["body_text"] == "Body"
+    assert messages_resource.get_calls == [
+        {"userId": "me", "id": "msg-1", "format": "full"}
+    ]
+
+
+def test_read_gmail_messages_lists_then_fetches_messages() -> None:
+    messages_resource = FakeMessagesResource()
+    messages_resource.list_response = {"messages": [{"id": "msg-1"}, {"id": "msg-2"}]}
+    messages_resource.get_responses = {
+        "msg-1": {
+            "id": "msg-1",
+            "threadId": "thread-1",
+            "payload": {
+                "headers": [{"name": "Subject", "value": "First"}],
+                "mimeType": "text/plain",
+                "body": {
+                    "data": base64.urlsafe_b64encode(b"Body 1").decode("utf-8").rstrip("=")
+                },
+            },
+        },
+        "msg-2": {
+            "id": "msg-2",
+            "threadId": "thread-2",
+            "payload": {
+                "headers": [{"name": "Subject", "value": "Second"}],
+                "mimeType": "text/plain",
+                "body": {
+                    "data": base64.urlsafe_b64encode(b"Body 2").decode("utf-8").rstrip("=")
+                },
+            },
+        },
+    }
+    service = FakeGmailService(messages_resource)
+
+    messages = gmail_client.read_gmail_messages(
+        query="from:boss@example.com",
+        max_results=2,
+        service=service,
+    )
+
+    assert [message["id"] for message in messages] == ["msg-1", "msg-2"]
+    assert messages_resource.list_calls == [
+        {"userId": "me", "q": "from:boss@example.com", "maxResults": 2}
+    ]
+    assert messages_resource.get_calls == [
+        {"userId": "me", "id": "msg-1", "format": "full"},
+        {"userId": "me", "id": "msg-2", "format": "full"},
+    ]

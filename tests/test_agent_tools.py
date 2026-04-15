@@ -24,7 +24,7 @@ def test_build_agent_tools_exposes_gmail_send_tool(monkeypatch) -> None:
 
     tools = agent_tools.build_agent_tools(fake_function_tool)
 
-    assert len(tools) == 1
+    assert len(tools) == 2
     send_gmail = tools[0]
     result = send_gmail(
         to=["to@example.com"],
@@ -50,3 +50,25 @@ def test_build_agent_tools_exposes_gmail_send_tool(monkeypatch) -> None:
     assert email.bcc == ["bcc@example.com"]
     assert email.subject == "Hello"
     assert email.body_text == "Body"
+
+
+def test_build_agent_tools_exposes_gmail_read_tool(monkeypatch) -> None:
+    monkeypatch.setattr(
+        agent_tools.gmail_client,
+        "read_gmail_messages",
+        lambda query=None, max_results=5: [
+            {"id": "msg-1", "subject": "Hello", "body_text": "Body"}
+        ],
+    )
+
+    tools = agent_tools.build_agent_tools(fake_function_tool)
+
+    read_gmail = tools[1]
+    result = read_gmail(query="from:boss@example.com", max_results=1)
+
+    assert read_gmail._tool_kwargs["name_override"] == "read_gmail"
+    assert result == {
+        "status": "ok",
+        "messages": [{"id": "msg-1", "subject": "Hello", "body_text": "Body"}],
+        "count": 1,
+    }

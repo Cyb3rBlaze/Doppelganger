@@ -18,8 +18,8 @@ from app.tools.agent_tools import build_agent_tools
 DEFAULT_ASSISTANT_NAME = "Personal Doppelganger"
 DEFAULT_ASSISTANT_MODEL = "gpt-5.4"
 DEFAULT_SUMMARY_AGENT_NAME = "Session Summarizer"
-DEFAULT_REPLY_HISTORY_EVENT_LIMIT = 8
-DEFAULT_SUMMARY_HISTORY_EVENT_LIMIT = 6
+DEFAULT_REPLY_HISTORY_EVENT_LIMIT = 10
+DEFAULT_SUMMARY_HISTORY_EVENT_LIMIT = 5
 MIND_DIR = Path(__file__).resolve().parents[2] / "mind"
 MIND_FILES = ("SOUL.md", "DIRECTIVES.md")
 DOTENV_PATH = Path(__file__).resolve().parents[2] / ".env"

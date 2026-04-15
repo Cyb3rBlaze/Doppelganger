@@ -45,4 +45,26 @@ def build_agent_tools(function_tool: Callable[..., Any]) -> list[Any]:
             "labelIds": result.get("labelIds"),
         }
 
-    return [send_gmail]
+    @function_tool(
+        name_override="read_gmail",
+        description_override=(
+            "Read recent Gmail messages for the user. "
+            "Use this when the user explicitly wants to inspect, summarize, or reference email."
+        ),
+    )
+    def read_gmail(
+        query: str | None = None,
+        max_results: int = 5,
+    ) -> dict[str, Any]:
+        """Read recent Gmail messages with an optional Gmail search query."""
+        messages = gmail_client.read_gmail_messages(
+            query=query,
+            max_results=max_results,
+        )
+        return {
+            "status": "ok",
+            "messages": messages,
+            "count": len(messages),
+        }
+
+    return [send_gmail, read_gmail]
