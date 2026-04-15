@@ -1,0 +1,309 @@
+.shell {
+  width: min(1400px, calc(100vw - 40px));
+  margin: 0 auto;
+  padding: 32px 0 40px;
+}
+
+.hero {
+  display: grid;
+  grid-template-columns: 1.3fr 1fr;
+  gap: 24px;
+  align-items: stretch;
+}
+
+.heroCopy {
+  padding: 36px;
+  border-radius: 28px;
+  background:
+    linear-gradient(135deg, rgba(255, 248, 235, 0.98), rgba(251, 230, 204, 0.9)),
+    #fff8eb;
+  border: 1px solid rgba(92, 66, 42, 0.12);
+  box-shadow: 0 24px 80px rgba(76, 58, 40, 0.12);
+}
+
+.kicker,
+.sidebarEyebrow {
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  font-size: 0.72rem;
+  color: #8c5f2b;
+  margin-bottom: 14px;
+}
+
+.heroCopy h1 {
+  font-size: clamp(2.3rem, 4vw, 4.6rem);
+  line-height: 0.95;
+  max-width: 10ch;
+}
+
+.subcopy {
+  margin-top: 18px;
+  max-width: 54ch;
+  font-size: 1rem;
+  line-height: 1.65;
+  color: rgba(33, 27, 22, 0.8);
+}
+
+.connectCard,
+.sidebar,
+.previewPanel {
+  border-radius: 28px;
+  border: 1px solid rgba(55, 44, 36, 0.12);
+  background: rgba(255, 252, 246, 0.84);
+  box-shadow: 0 20px 60px rgba(58, 42, 24, 0.08);
+  backdrop-filter: blur(18px);
+}
+
+.connectCard {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 28px;
+}
+
+.fieldLabel {
+  font-size: 0.88rem;
+  font-weight: 700;
+  margin-bottom: 12px;
+}
+
+.textarea {
+  width: 100%;
+  border: 1px solid rgba(72, 59, 48, 0.18);
+  border-radius: 18px;
+  padding: 16px;
+  min-height: 128px;
+  resize: vertical;
+  background: rgba(255, 255, 255, 0.88);
+  color: inherit;
+}
+
+.textarea:focus {
+  outline: 2px solid rgba(217, 129, 46, 0.35);
+  border-color: rgba(217, 129, 46, 0.5);
+}
+
+.connectButton {
+  margin-top: 14px;
+  border: none;
+  border-radius: 999px;
+  padding: 14px 20px;
+  background: linear-gradient(135deg, #cb6f2e, #8e3e1f);
+  color: #fffaf5;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.connectButton:disabled {
+  cursor: wait;
+  opacity: 0.75;
+}
+
+.helperText,
+.versionText,
+.tableMeta,
+.tableCount,
+.limitPill,
+.emptyState,
+.errorBanner {
+  font-size: 0.92rem;
+}
+
+.helperText,
+.versionText,
+.tableMeta,
+.emptyState {
+  color: rgba(33, 27, 22, 0.68);
+}
+
+.errorBanner {
+  margin-top: 18px;
+  padding: 14px 18px;
+  border-radius: 16px;
+  color: #782c1f;
+  background: rgba(225, 125, 100, 0.14);
+  border: 1px solid rgba(184, 92, 70, 0.22);
+}
+
+.viewer {
+  margin-top: 22px;
+  display: grid;
+  grid-template-columns: 340px minmax(0, 1fr);
+  gap: 22px;
+  min-height: 620px;
+}
+
+.sidebar,
+.previewPanel {
+  padding: 22px;
+}
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebarHeader,
+.previewHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.sidebarHeader h2,
+.previewHeader h2 {
+  font-size: 1.35rem;
+}
+
+.tableCount,
+.limitPill {
+  white-space: nowrap;
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: rgba(215, 173, 98, 0.16);
+  color: #71461b;
+}
+
+.tableList {
+  margin-top: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  overflow: auto;
+}
+
+.tableButton,
+.tableButtonActive {
+  width: 100%;
+  text-align: left;
+  padding: 14px 16px;
+  border-radius: 18px;
+  border: 1px solid rgba(72, 59, 48, 0.1);
+  background: rgba(255, 255, 255, 0.7);
+  cursor: pointer;
+  transition:
+    transform 120ms ease,
+    border-color 120ms ease,
+    background 120ms ease;
+}
+
+.tableButton:hover,
+.tableButtonActive:hover {
+  transform: translateY(-1px);
+}
+
+.tableButtonActive {
+  border-color: rgba(187, 108, 37, 0.4);
+  background: rgba(245, 220, 190, 0.82);
+}
+
+.tableName {
+  display: block;
+  font-weight: 700;
+  word-break: break-word;
+}
+
+.tableMeta {
+  display: block;
+  margin-top: 4px;
+}
+
+.previewPanel {
+  display: flex;
+  flex-direction: column;
+}
+
+.versionText {
+  margin-top: 12px;
+}
+
+.tableWrap {
+  margin-top: 18px;
+  overflow: auto;
+  border-radius: 20px;
+  border: 1px solid rgba(72, 59, 48, 0.1);
+  background: rgba(255, 255, 255, 0.76);
+}
+
+.dataTable {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 720px;
+}
+
+.dataTable th,
+.dataTable td {
+  vertical-align: top;
+  padding: 14px 16px;
+  border-bottom: 1px solid rgba(72, 59, 48, 0.08);
+  text-align: left;
+}
+
+.dataTable thead th {
+  position: sticky;
+  top: 0;
+  background: #f5ecdf;
+  z-index: 1;
+}
+
+.dataTable th span,
+.dataTable th small {
+  display: block;
+}
+
+.dataTable th small {
+  margin-top: 4px;
+  color: rgba(33, 27, 22, 0.55);
+  font-weight: 500;
+}
+
+.dataTable td code {
+  display: inline-block;
+  max-width: 420px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 0.86rem;
+  color: #432b19;
+}
+
+.emptyState {
+  margin: auto 0;
+}
+
+@media (max-width: 980px) {
+  .shell {
+    width: min(100vw - 28px, 1400px);
+    padding-top: 18px;
+  }
+
+  .hero,
+  .viewer {
+    grid-template-columns: 1fr;
+  }
+
+  .heroCopy,
+  .connectCard,
+  .sidebar,
+  .previewPanel {
+    border-radius: 22px;
+  }
+
+  .heroCopy {
+    padding: 28px;
+  }
+
+  .heroCopy h1 {
+    max-width: 14ch;
+  }
+
+  .viewer {
+    min-height: auto;
+  }
+
+  .tableList {
+    max-height: 320px;
+  }
+}
