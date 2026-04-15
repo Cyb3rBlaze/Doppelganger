@@ -107,6 +107,57 @@ def build_agent_tools(function_tool: Callable[..., Any]) -> list[Any]:
         return file_tools.read_file(path, max_chars=max_chars)
 
     @function_tool(
+        name_override="get_file_info",
+        description_override=(
+            "Get metadata for a project text file, including line count and a content hash. "
+            "Use this before making targeted edits so you can reason about file size and "
+            "optionally verify the file has not changed."
+        ),
+    )
+    def get_file_info(path: str) -> dict[str, Any]:
+        """Return basic metadata for a project text file."""
+        return file_tools.get_file_info(path)
+
+    @function_tool(
+        name_override="read_file_window",
+        description_override=(
+            "Read a specific inclusive line window from a project text file. "
+            "Use this for large files when you want to inspect them in overlapping sections "
+            "instead of reading the whole file at once."
+        ),
+    )
+    def read_file_window(
+        path: str,
+        start_line: int,
+        end_line: int,
+    ) -> dict[str, Any]:
+        """Read an inclusive line window from a project text file."""
+        return file_tools.read_file_window(path, start_line, end_line)
+
+    @function_tool(
+        name_override="search_in_file",
+        description_override=(
+            "Search a project text file for matching text and return nearby snippets with line numbers. "
+            "Use this to locate the exact region that should be revised before calling replace_in_file."
+        ),
+    )
+    def search_in_file(
+        path: str,
+        query: str,
+        case_sensitive: bool = False,
+        context_lines: int = file_tools.DEFAULT_SEARCH_CONTEXT_LINES,
+        max_matches: int = file_tools.DEFAULT_SEARCH_MAX_MATCHES,
+    ) -> dict[str, Any]:
+        """Search a project text file and return matching line snippets."""
+        return file_tools.search_in_file(
+            path,
+            query,
+            case_sensitive=case_sensitive,
+            context_lines=context_lines,
+            max_matches=max_matches,
+        )
+
+    @function_tool(
         name_override="write_file",
         description_override=(
             "Write or append a project text file. Use this especially for revising "
@@ -123,4 +174,36 @@ def build_agent_tools(function_tool: Callable[..., Any]) -> list[Any]:
         """Write or append text content to a project file."""
         return file_tools.write_file(path, content, append=append)
 
-    return [send_gmail, read_gmail, search_internal_documents, read_file, write_file]
+    @function_tool(
+        name_override="replace_in_file",
+        description_override=(
+            "Replace one exact text block inside a project text file. "
+            "Use this for targeted edits after you have identified the precise section to change. "
+            "Optionally pass an expected file hash from get_file_info or read_file_window to avoid stale edits."
+        ),
+    )
+    def replace_in_file(
+        path: str,
+        old_text: str,
+        new_text: str,
+        expected_hash: str | None = None,
+    ) -> dict[str, Any]:
+        """Replace one exact text block in a project text file."""
+        return file_tools.replace_in_file(
+            path,
+            old_text,
+            new_text,
+            expected_hash=expected_hash,
+        )
+
+    return [
+        send_gmail,
+        read_gmail,
+        search_internal_documents,
+        read_file,
+        get_file_info,
+        read_file_window,
+        search_in_file,
+        write_file,
+        replace_in_file,
+    ]

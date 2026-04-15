@@ -28,7 +28,7 @@ def test_build_agent_tools_exposes_gmail_send_tool(monkeypatch) -> None:
 
     tools = agent_tools.build_agent_tools(fake_function_tool)
 
-    assert len(tools) == 5
+    assert len(tools) == 9
     send_gmail = tools[0]
     result = send_gmail(
         to=["to@example.com"],
@@ -135,6 +135,82 @@ def test_build_agent_tools_exposes_read_file_tool(monkeypatch) -> None:
     assert result["content"] == "hello"
 
 
+def test_build_agent_tools_exposes_get_file_info_tool(monkeypatch) -> None:
+    monkeypatch.setattr(
+        agent_tools.file_tools,
+        "get_file_info",
+        lambda path: {
+            "status": "ok",
+            "path": "/tmp/test.md",
+            "bytes": 12,
+            "char_count": 12,
+            "line_count": 2,
+            "sha256": "abc123",
+        },
+    )
+
+    tools = agent_tools.build_agent_tools(fake_function_tool)
+
+    get_file_info = tools[4]
+    result = get_file_info(path="mind/DIRECTIVES.md")
+
+    assert get_file_info._tool_kwargs["name_override"] == "get_file_info"
+    assert result == {
+        "status": "ok",
+        "path": "/tmp/test.md",
+        "bytes": 12,
+        "char_count": 12,
+        "line_count": 2,
+        "sha256": "abc123",
+    }
+
+
+def test_build_agent_tools_exposes_read_file_window_tool(monkeypatch) -> None:
+    monkeypatch.setattr(
+        agent_tools.file_tools,
+        "read_file_window",
+        lambda path, start_line, end_line: {
+            "status": "ok",
+            "path": "/tmp/test.md",
+            "content": "window",
+            "start_line": start_line,
+            "end_line": end_line,
+        },
+    )
+
+    tools = agent_tools.build_agent_tools(fake_function_tool)
+
+    read_file_window = tools[5]
+    result = read_file_window(path="mind/SOUL.md", start_line=10, end_line=20)
+
+    assert read_file_window._tool_kwargs["name_override"] == "read_file_window"
+    assert result["content"] == "window"
+
+
+def test_build_agent_tools_exposes_search_in_file_tool(monkeypatch) -> None:
+    monkeypatch.setattr(
+        agent_tools.file_tools,
+        "search_in_file",
+        lambda path, query, case_sensitive=False, context_lines=2, max_matches=20: {
+            "status": "ok",
+            "path": "/tmp/test.md",
+            "query": query,
+            "match_count": 1,
+            "matches": [{"line_number": 3, "snippet": "matched text"}],
+            "truncated": False,
+        },
+    )
+
+    tools = agent_tools.build_agent_tools(fake_function_tool)
+
+    search_in_file = tools[6]
+    result = search_in_file(path="mind/DIRECTIVES.md", query="matched")
+
+    assert search_in_file._tool_kwargs["name_override"] == "search_in_file"
+    assert result["match_count"] == 1
+    assert result["matches"][0]["line_number"] == 3
+
+
 def test_build_agent_tools_exposes_write_file_tool(monkeypatch) -> None:
     monkeypatch.setattr(
         agent_tools.file_tools,
@@ -149,7 +225,7 @@ def test_build_agent_tools_exposes_write_file_tool(monkeypatch) -> None:
 
     tools = agent_tools.build_agent_tools(fake_function_tool)
 
-    write_file = tools[4]
+    write_file = tools[7]
     result = write_file(path="mind/DIRECTIVES.md", content="updated", append=False)
 
     assert write_file._tool_kwargs["name_override"] == "write_file"
@@ -159,3 +235,32 @@ def test_build_agent_tools_exposes_write_file_tool(monkeypatch) -> None:
         "bytes_written": len("updated".encode("utf-8")),
         "append": False,
     }
+
+
+def test_build_agent_tools_exposes_replace_in_file_tool(monkeypatch) -> None:
+    monkeypatch.setattr(
+        agent_tools.file_tools,
+        "replace_in_file",
+        lambda path, old_text, new_text, expected_hash=None: {
+            "status": "ok",
+            "path": "/tmp/test.md",
+            "replacements": 1,
+            "old_sha256": expected_hash,
+            "new_sha256": "newhash",
+            "bytes_written": 42,
+        },
+    )
+
+    tools = agent_tools.build_agent_tools(fake_function_tool)
+
+    replace_in_file = tools[8]
+    result = replace_in_file(
+        path="mind/SOUL.md",
+        old_text="old",
+        new_text="new",
+        expected_hash="oldhash",
+    )
+
+    assert replace_in_file._tool_kwargs["name_override"] == "replace_in_file"
+    assert result["replacements"] == 1
+    assert result["old_sha256"] == "oldhash"

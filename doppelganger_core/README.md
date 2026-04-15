@@ -12,7 +12,7 @@ This project is a local, single-user AI doppelganger. The current system support
 - retrieve the top 3 internal documents by cosine similarity and inject them into the reply context
 - expose Gmail read/send as explicit agent tools
 - expose a deliberate internal-document retrieval tool for deeper note lookups
-- expose constrained `read_file` and `write_file` tools for project text files, including the doppelganger mind files
+- expose constrained file-inspection and targeted-edit tools for project text files, including the doppelganger mind files
 
 ## Current Shape
 
@@ -127,12 +127,23 @@ The explicit tool is for deliberate note/document lookup when the agent wants to
 The agent now also has:
 
 - `read_file`
+- `get_file_info`
+- `read_file_window`
+- `search_in_file`
 - `write_file`
+- `replace_in_file`
 
 These are constrained to safe text-like files inside `doppelganger_core/`. They are intended mainly for deliberate self-editing of files like:
 
 - `mind/SOUL.md`
 - `mind/DIRECTIVES.md`
+
+The recommended edit flow is:
+
+- inspect file size and hash with `get_file_info`
+- read targeted windows with `read_file_window`
+- locate exact sections with `search_in_file`
+- make exact block replacements with `replace_in_file`
 
 Blocked targets include secrets, token files, and paths outside the project root.
 
