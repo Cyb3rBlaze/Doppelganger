@@ -9,7 +9,7 @@ This project is a local, single-user AI doppelganger. The current system support
 - run via API, terminal, or Telegram polling
 - store daily message sessions in Postgres
 - maintain a rolling summary for each daily session
-- retrieve the top 3 internal chunk/window matches by cosine similarity and inject them into the reply context
+- retrieve the top 5 internal chunk/window seed matches by cosine similarity, expand 2 hops across graph edges, and inject that neighborhood into the reply context
 - expose Gmail read/send as explicit agent tools
 - expose a deliberate internal-document retrieval tool for deeper note lookups
 - expose constrained file-inspection and targeted-edit tools for project text files, including the doppelganger mind files
@@ -99,7 +99,7 @@ The reply prompt currently includes:
 - previous session summaries
 - current session summary
 - recent current-session message history
-- top 3 retrieved internal chunk/window matches from the pgvector store when the message looks knowledge-seeking
+- the top 5 retrieved internal chunk/window seed matches from the pgvector store plus a 2-hop graph expansion through `connected_nodes` when the message looks knowledge-seeking
 
 After each reply, the app refreshes the current session summary and stores it back on the same row.
 

@@ -20,7 +20,8 @@ EMBEDDING_MODEL_ENV = "INTERNAL_DOCUMENTS_EMBEDDING_MODEL"
 EMBEDDING_DIMENSION_ENV = "INTERNAL_DOCUMENTS_EMBEDDING_DIMENSION"
 DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"
 DEFAULT_EMBEDDING_DIMENSION = 1536
-DEFAULT_RETRIEVAL_LIMIT = 3
+DEFAULT_RETRIEVAL_LIMIT = 5
+DEFAULT_SUBGRAPH_EXPANSION_STEPS = 2
 DEFAULT_DOCUMENT_CONTEXT_CHAR_LIMIT = 1600
 KNOWLEDGE_SEEKING_PATTERNS = (
     r"\?$",
@@ -178,6 +179,153 @@ def search_internal_documents(
     ]
 
 
+def fetch_internal_document_chunks_by_ids(
+    chunk_ids: list[str],
+    *,
+    postgres_dsn: str | None = None,
+) -> list[dict[str, Any]]:
+    """Fetch internal document chunks by chunk id."""
+    resolved_dsn = postgres_dsn or get_internal_documents_dsn()
+    if not resolved_dsn or not chunk_ids:
+        return []
+
+    psycopg = _load_psycopg()
+    with psycopg.connect(resolved_dsn) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT
+                    document_id,
+                    chunk_id,
+                    source_path,
+                    source_kind,
+                    title,
+                    content,
+                    metadata,
+                    connected_nodes,
+                    chunk_index,
+                    window_start_chunk_index,
+                    window_end_chunk_index
+                FROM document_chunks
+                WHERE chunk_id = ANY(%(chunk_ids)s)
+                """,
+                {"chunk_ids": chunk_ids},
+            )
+            rows = cursor.fetchall()
+
+    rows_by_chunk_id = {
+        row[1]: {
+            "document_id": row[0],
+            "chunk_id": row[1],
+            "source_path": row[2],
+            "source_kind": row[3],
+            "title": row[4],
+            "content": row[5],
+            "metadata": row[6],
+            "connected_nodes": row[7],
+            "chunk_index": row[8],
+            "window_start_chunk_index": row[9],
+            "window_end_chunk_index": row[10],
+        }
+        for row in rows
+    }
+    return [rows_by_chunk_id[chunk_id] for chunk_id in chunk_ids if chunk_id in rows_by_chunk_id]
+
+
+def _extract_neighbor_candidates(
+    frontier: list[dict[str, Any]],
+    *,
+    seen_chunk_ids: set[str],
+) -> list[tuple[str, float]]:
+    """Extract ordered neighbor candidates from the current frontier."""
+    candidate_scores: dict[str, float] = {}
+    candidate_order: dict[str, int] = {}
+    order_index = 0
+
+    for document in frontier:
+        connected_nodes = document.get("connected_nodes")
+        if not isinstance(connected_nodes, list):
+            continue
+        for connected_node in connected_nodes:
+            if not isinstance(connected_node, dict):
+                continue
+            chunk_id = connected_node.get("chunk_id")
+            if not isinstance(chunk_id, str) or not chunk_id or chunk_id in seen_chunk_ids:
+                continue
+            raw_score = connected_node.get("score")
+            score = raw_score if isinstance(raw_score, (int, float)) else 0.0
+            candidate_scores[chunk_id] = max(float(score), candidate_scores.get(chunk_id, float("-inf")))
+            candidate_order.setdefault(chunk_id, order_index)
+            order_index += 1
+
+    ordered_chunk_ids = sorted(
+        candidate_scores,
+        key=lambda chunk_id: (-candidate_scores[chunk_id], candidate_order[chunk_id], chunk_id),
+    )
+    return [(chunk_id, candidate_scores[chunk_id]) for chunk_id in ordered_chunk_ids]
+
+
+def expand_internal_document_subgraph(
+    seed_documents: list[dict[str, Any]],
+    *,
+    steps: int = DEFAULT_SUBGRAPH_EXPANSION_STEPS,
+    postgres_dsn: str | None = None,
+) -> list[dict[str, Any]]:
+    """Expand outward from seed chunks across connected nodes."""
+    if steps < 0:
+        raise RuntimeError("steps must be greater than or equal to zero.")
+    if not seed_documents:
+        return []
+
+    expanded_documents: list[dict[str, Any]] = []
+    seen_chunk_ids: set[str] = set()
+    frontier: list[dict[str, Any]] = []
+
+    for document in seed_documents:
+        chunk_id = document.get("chunk_id")
+        if not isinstance(chunk_id, str) or not chunk_id or chunk_id in seen_chunk_ids:
+            continue
+        seen_chunk_ids.add(chunk_id)
+        annotated_document = dict(document)
+        annotated_document["retrieval_layer"] = 0
+        expanded_documents.append(annotated_document)
+        frontier.append(annotated_document)
+
+    for step in range(1, steps + 1):
+        candidates = _extract_neighbor_candidates(frontier, seen_chunk_ids=seen_chunk_ids)
+        if not candidates:
+            break
+
+        candidate_chunk_ids = [chunk_id for chunk_id, _ in candidates]
+        fetched_documents = fetch_internal_document_chunks_by_ids(
+            candidate_chunk_ids,
+            postgres_dsn=postgres_dsn,
+        )
+        fetched_by_chunk_id = {
+            document["chunk_id"]: document
+            for document in fetched_documents
+            if isinstance(document.get("chunk_id"), str)
+        }
+
+        next_frontier: list[dict[str, Any]] = []
+        for chunk_id, edge_score in candidates:
+            document = fetched_by_chunk_id.get(chunk_id)
+            if document is None or chunk_id in seen_chunk_ids:
+                continue
+            seen_chunk_ids.add(chunk_id)
+            annotated_document = dict(document)
+            annotated_document["retrieval_layer"] = step
+            annotated_document["score"] = edge_score
+            expanded_documents.append(annotated_document)
+            next_frontier.append(annotated_document)
+
+        frontier = next_frontier
+        if not frontier:
+            break
+
+    return expanded_documents
+
+
 def _truncate_document_content(
     content: str,
     limit: int = DEFAULT_DOCUMENT_CONTEXT_CHAR_LIMIT,
@@ -203,29 +351,45 @@ def search_internal_documents_for_query(
     query_text: str,
     *,
     limit: int = DEFAULT_RETRIEVAL_LIMIT,
+    expansion_steps: int = DEFAULT_SUBGRAPH_EXPANSION_STEPS,
 ) -> list[dict[str, Any]]:
     """Embed a raw query string and return top internal document matches."""
     if not get_internal_documents_dsn():
         return []
 
     query_embedding = embed_query_text(query_text)
-    results = search_internal_documents(query_embedding, limit=limit)
-    return _truncate_retrieved_documents(results)
+    seed_results = search_internal_documents(query_embedding, limit=limit)
+    expanded_results = expand_internal_document_subgraph(
+        seed_results,
+        steps=expansion_steps,
+    )
+    return _truncate_retrieved_documents(expanded_results)
 
 
 def retrieve_internal_document_context_sync(
     message: Message,
     *,
     limit: int = DEFAULT_RETRIEVAL_LIMIT,
+    expansion_steps: int = DEFAULT_SUBGRAPH_EXPANSION_STEPS,
 ) -> list[dict[str, Any]]:
     """Retrieve top internal documents for the current user message."""
-    return search_internal_documents_for_query(message.text, limit=limit)
+    return search_internal_documents_for_query(
+        message.text,
+        limit=limit,
+        expansion_steps=expansion_steps,
+    )
 
 
 async def retrieve_internal_document_context(
     message: Message,
     *,
     limit: int = DEFAULT_RETRIEVAL_LIMIT,
+    expansion_steps: int = DEFAULT_SUBGRAPH_EXPANSION_STEPS,
 ) -> list[dict[str, Any]]:
     """Retrieve top internal documents without blocking the async server loop."""
-    return await asyncio.to_thread(retrieve_internal_document_context_sync, message, limit=limit)
+    return await asyncio.to_thread(
+        retrieve_internal_document_context_sync,
+        message,
+        limit=limit,
+        expansion_steps=expansion_steps,
+    )

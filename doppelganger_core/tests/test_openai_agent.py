@@ -130,6 +130,7 @@ def test_build_agent_input_includes_retrieved_documents() -> None:
             {
                 "title": "Investing Notes",
                 "source_path": "/docs/investing.gdoc",
+                "retrieval_layer": 1,
                 "score": 0.91,
                 "content": "Key investing principles",
             }
@@ -139,7 +140,8 @@ def test_build_agent_input_includes_retrieved_documents() -> None:
     assert "Relevant retrieved internal documents:" in input_text
     assert "Title: Investing Notes" in input_text
     assert "Source path: /docs/investing.gdoc" in input_text
-    assert "Similarity score: 0.91" in input_text
+    assert "Retrieval layer: graph hop 1" in input_text
+    assert "Relevance score: 0.91" in input_text
     assert "Content:\nKey investing principles" in input_text
 
 

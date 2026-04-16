@@ -78,7 +78,7 @@ def build_agent_tools(function_tool: Callable[..., Any]) -> list[Any]:
     )
     def search_internal_documents(
         query: str,
-        max_results: int = 3,
+        max_results: int = 5,
     ) -> dict[str, Any]:
         """Search the internal documents pgvector store with an explicit query."""
         documents = internal_documents.search_internal_documents_for_query(

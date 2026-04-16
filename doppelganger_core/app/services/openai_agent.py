@@ -118,12 +118,21 @@ def build_agent_input(
     if retrieved_documents:
         document_lines = []
         for document in retrieved_documents:
+            retrieval_layer = document.get("retrieval_layer")
+            retrieval_layer_label = (
+                "seed match"
+                if retrieval_layer == 0
+                else f"graph hop {retrieval_layer}"
+                if isinstance(retrieval_layer, int)
+                else "unknown"
+            )
             document_lines.append(
                 "\n".join(
                     [
                         f"- Title: {document.get('title') or 'Untitled'}",
                         f"  Source path: {document.get('source_path') or 'unknown'}",
-                        f"  Similarity score: {document.get('score')}",
+                        f"  Retrieval layer: {retrieval_layer_label}",
+                        f"  Relevance score: {document.get('score')}",
                         f"  Content:\n{document.get('content') or ''}",
                     ]
                 )
