@@ -119,7 +119,7 @@ The doppelganger now has two retrieval modes for internal documents:
 - automatic gated retrieval for knowledge-seeking prompts
 - explicit tool-driven retrieval through `search_internal_documents`
 
-The explicit tool is for deliberate note/document lookup when the agent wants to search the internal-doc database on purpose instead of relying only on the lightweight automatic context injection. Retrieval currently returns chunk/window rows rather than grouped whole-document answers.
+The explicit tool is for deliberate note/document lookup when the agent wants to search the internal-doc database on purpose instead of relying only on the lightweight automatic context injection. Retrieval currently returns chunk/window rows rather than grouped whole-document answers, and those rows now include `connected_nodes` graph metadata.
 
 ## File Tools
 

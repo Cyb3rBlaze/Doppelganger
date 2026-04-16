@@ -11,6 +11,7 @@ This project ingests internal documents into PostgreSQL + pgvector and exposes v
 - compare neighboring chunk/window similarity and store adaptive sliding windows
 - store document chunks in Postgres with pgvector
 - run cosine-similarity search over stored chunks
+- attach graph-style `connected_nodes` metadata to stored chunk/window rows
 - show tqdm-style progress during ingest
 - skip problematic documents and write them to a plaintext report
 - write a JSON report showing which chunk/window steps were merged and their similarity scores
@@ -26,6 +27,7 @@ The `document_chunks` table stores:
 - `title`
 - `content`
 - `metadata`
+- `connected_nodes`
 - `chunk_index`
 - `window_start_chunk_index`
 - `window_end_chunk_index`
@@ -33,6 +35,7 @@ The `document_chunks` table stores:
 - timestamps
 
 Rows now represent adaptive chunk windows. Every embedding payload includes the document title plus compact metadata so same-document chunks share some common semantic framing.
+Each stored row also carries `connected_nodes`, a JSON graph of related chunk/window nodes and why they are connected.
 
 ## Chunking and Windowing
 
@@ -48,6 +51,25 @@ The current ingest pipeline works like this:
 - if the combined window gets too large, pop oldest base chunks from the front so the window slides forward
 
 This means stored rows are adaptive windows over ordered base chunks rather than one row per whole document.
+
+## Graph Relations
+
+After the final chunk/window set is built for a document, the pipeline attaches graph-style relations to each stored row in `connected_nodes`.
+
+Current relation types are:
+
+- `adjacent`
+- `semantic`
+- `entity_overlap`
+- `same_heading`
+- `same_document`
+
+Each connected node entry stores:
+
+- target `chunk_id`
+- an aggregate `score`
+- `edge_types`
+- per-signal scores in `signals`
 
 ## Environment
 
@@ -106,6 +128,7 @@ During ingest the CLI now:
 - retries transient Google export failures
 - skips documents that fail to load
 - skips documents that exceed the embedding context length
+- writes graph-style connected-node metadata onto final stored chunk/window rows
 
 Skipped documents are written to:
 
@@ -125,3 +148,4 @@ internal_documents_core/chunk_merge_report.json
 - Local `.gdoc` files are only Google Drive pointer files, so real content is fetched through Google Drive export.
 - Unsupported files such as `.gslides`, `.gsheet`, images, and diagrams are currently ignored.
 - Retrieval currently returns top matching chunk/window rows rather than grouped whole-document answers.
+- Retrieval results now also include `connected_nodes` metadata from the graph layer.

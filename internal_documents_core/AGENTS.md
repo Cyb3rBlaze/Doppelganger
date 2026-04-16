@@ -10,6 +10,7 @@
 - Add document discovery and whole-document persistence first.
 - Keep storage in chunk/window rows.
 - Produce adaptive chunk/window embeddings with similarity-based merging over character-budget base chunks.
+- Attach graph-style relations between final chunk/window nodes and store them on each row.
 - Add retrieval/query behavior after ingestion is stable.
 
 ## Architecture Direction
@@ -21,7 +22,7 @@
 ## Storage Direction
 - Use PostgreSQL as the source of truth.
 - Use the pgvector extension for embedding storage and similarity search.
-- Store one row per chunk/window with enough document metadata to trace back to the source file.
+- Store one row per chunk/window with enough document metadata to trace back to the source file, plus `connected_nodes` graph metadata.
 
 ## Development Rules
 - Add tests for each slice before expanding scope.

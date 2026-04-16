@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS document_chunks (
     title TEXT NULL,
     content TEXT NOT NULL,
     metadata JSONB NOT NULL DEFAULT '{{}}'::jsonb,
+    connected_nodes JSONB NOT NULL DEFAULT '[]'::jsonb,
     chunk_index INTEGER NOT NULL,
     window_start_chunk_index INTEGER NOT NULL,
     window_end_chunk_index INTEGER NOT NULL,
@@ -56,6 +57,11 @@ CREATE INDEX IF NOT EXISTS document_chunks_chunk_index_idx
 ON document_chunks (document_id, chunk_index)
 """
 
+ADD_CONNECTED_NODES_COLUMN_SQL = """
+ALTER TABLE document_chunks
+ADD COLUMN IF NOT EXISTS connected_nodes JSONB NOT NULL DEFAULT '[]'::jsonb
+"""
+
 DELETE_DOCUMENT_CHUNKS_SQL = """
 DELETE FROM document_chunks
 WHERE document_id = %(document_id)s
@@ -70,6 +76,7 @@ INSERT INTO document_chunks (
     title,
     content,
     metadata,
+    connected_nodes,
     chunk_index,
     window_start_chunk_index,
     window_end_chunk_index,
@@ -82,6 +89,7 @@ INSERT INTO document_chunks (
     %(title)s,
     %(content)s,
     %(metadata)s::jsonb,
+    %(connected_nodes)s::jsonb,
     %(chunk_index)s,
     %(window_start_chunk_index)s,
     %(window_end_chunk_index)s,
@@ -93,6 +101,7 @@ ON CONFLICT (chunk_id) DO UPDATE SET
     title = EXCLUDED.title,
     content = EXCLUDED.content,
     metadata = EXCLUDED.metadata,
+    connected_nodes = EXCLUDED.connected_nodes,
     chunk_index = EXCLUDED.chunk_index,
     window_start_chunk_index = EXCLUDED.window_start_chunk_index,
     window_end_chunk_index = EXCLUDED.window_end_chunk_index,
@@ -109,6 +118,7 @@ SELECT
     title,
     content,
     metadata,
+    connected_nodes,
     chunk_index,
     window_start_chunk_index,
     window_end_chunk_index,
@@ -138,6 +148,7 @@ class DocumentChunkRecord:
     title: str
     content: str
     metadata: dict[str, Any]
+    connected_nodes: list[dict[str, Any]]
     chunk_index: int
     window_start_chunk_index: int
     window_end_chunk_index: int
@@ -252,6 +263,7 @@ def ensure_pgvector_schema(*, config: VectorStoreConfig | None = None) -> bool:
         with connection.cursor() as cursor:
             cursor.execute(ENABLE_PGVECTOR_EXTENSION_SQL)
             cursor.execute(build_create_documents_table_sql(resolved_config.embedding_dimension))
+            cursor.execute(ADD_CONNECTED_NODES_COLUMN_SQL)
             cursor.execute(CREATE_DOCUMENTS_LOOKUP_INDEX_SQL)
             cursor.execute(CREATE_CHUNKS_ORDER_INDEX_SQL)
         connection.commit()
@@ -272,6 +284,7 @@ def build_document_chunk_record(
     window_end_chunk_index: int,
     content: str | None = None,
     metadata: dict[str, Any] | None = None,
+    connected_nodes: list[dict[str, Any]] | None = None,
 ) -> DocumentChunkRecord:
     """Build one chunk/window record from a normalized source document."""
     return DocumentChunkRecord(
@@ -282,6 +295,7 @@ def build_document_chunk_record(
         title=document.title,
         content=document.content if content is None else content,
         metadata=document.metadata if metadata is None else metadata,
+        connected_nodes=[] if connected_nodes is None else connected_nodes,
         chunk_index=chunk_index,
         window_start_chunk_index=window_start_chunk_index,
         window_end_chunk_index=window_end_chunk_index,
@@ -320,6 +334,7 @@ def upsert_document_chunk(
                     "title": chunk.title,
                     "content": chunk.content,
                     "metadata": json.dumps(chunk.metadata, default=str),
+                    "connected_nodes": json.dumps(chunk.connected_nodes, default=str),
                     "chunk_index": chunk.chunk_index,
                     "window_start_chunk_index": chunk.window_start_chunk_index,
                     "window_end_chunk_index": chunk.window_end_chunk_index,
@@ -354,6 +369,7 @@ def replace_document_chunks(
                         "title": chunk.title,
                         "content": chunk.content,
                         "metadata": json.dumps(chunk.metadata, default=str),
+                        "connected_nodes": json.dumps(chunk.connected_nodes, default=str),
                         "chunk_index": chunk.chunk_index,
                         "window_start_chunk_index": chunk.window_start_chunk_index,
                         "window_end_chunk_index": chunk.window_end_chunk_index,
@@ -402,10 +418,11 @@ def search_documents(
             "title": row[4],
             "content": row[5],
             "metadata": row[6],
-            "chunk_index": row[7],
-            "window_start_chunk_index": row[8],
-            "window_end_chunk_index": row[9],
-            "score": row[10],
+            "connected_nodes": row[7],
+            "chunk_index": row[8],
+            "window_start_chunk_index": row[9],
+            "window_end_chunk_index": row[10],
+            "score": row[11],
         }
         for row in rows
     ]

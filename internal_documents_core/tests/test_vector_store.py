@@ -102,10 +102,12 @@ def test_ensure_pgvector_schema_executes_extension_and_table_sql(monkeypatch) ->
     assert cursor.executed[1][0].strip().startswith("CREATE TABLE IF NOT EXISTS document_chunks")
     assert "embedding VECTOR(1536) NOT NULL" in cursor.executed[1][0]
     assert "chunk_id TEXT NOT NULL" in cursor.executed[1][0]
+    assert "connected_nodes JSONB NOT NULL DEFAULT '[]'::jsonb" in cursor.executed[1][0]
     assert "chunk_index INTEGER NOT NULL" in cursor.executed[1][0]
     assert cursor.executed[1][1] is None
-    assert cursor.executed[2][0].strip().startswith("CREATE INDEX IF NOT EXISTS")
+    assert cursor.executed[2][0].strip().startswith("ALTER TABLE document_chunks")
     assert cursor.executed[3][0].strip().startswith("CREATE INDEX IF NOT EXISTS")
+    assert cursor.executed[4][0].strip().startswith("CREATE INDEX IF NOT EXISTS")
     assert connection.commits == 1
 
 
@@ -183,6 +185,7 @@ def test_build_default_document_chunk_wraps_whole_document_as_chunk_zero() -> No
     assert chunk.chunk_index == 0
     assert chunk.window_start_chunk_index == 0
     assert chunk.window_end_chunk_index == 0
+    assert chunk.connected_nodes == []
     assert chunk.content == "hello world"
 
 
@@ -217,6 +220,7 @@ def test_upsert_document_writes_one_chunk_row(monkeypatch) -> None:
     assert params["document_id"] == "gdoc:abc123"
     assert params["chunk_id"] == "gdoc:abc123:chunk:0"
     assert params["source_kind"] == "gdoc"
+    assert params["connected_nodes"] == "[]"
     assert params["chunk_index"] == 0
     assert params["window_start_chunk_index"] == 0
     assert params["window_end_chunk_index"] == 0
@@ -239,6 +243,7 @@ def test_replace_document_chunks_replaces_all_rows_for_one_document(monkeypatch)
             title="note",
             content="hello world",
             metadata={"doc_id": "abc123"},
+            connected_nodes=[],
             chunk_index=0,
             window_start_chunk_index=0,
             window_end_chunk_index=0,
@@ -275,6 +280,7 @@ def test_search_documents_returns_ranked_chunk_rows(monkeypatch) -> None:
             "note",
             "chunk text",
             {"doc_id": "abc123"},
+            [{"chunk_id": "gdoc:abc123:chunk:1", "score": 1.0, "edge_types": ["adjacent"], "signals": {"adjacent": 1.0}}],
             0,
             0,
             0,
@@ -304,6 +310,14 @@ def test_search_documents_returns_ranked_chunk_rows(monkeypatch) -> None:
             "title": "note",
             "content": "chunk text",
             "metadata": {"doc_id": "abc123"},
+            "connected_nodes": [
+                {
+                    "chunk_id": "gdoc:abc123:chunk:1",
+                    "score": 1.0,
+                    "edge_types": ["adjacent"],
+                    "signals": {"adjacent": 1.0},
+                }
+            ],
             "chunk_index": 0,
             "window_start_chunk_index": 0,
             "window_end_chunk_index": 0,

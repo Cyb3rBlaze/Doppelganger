@@ -143,6 +143,7 @@ def search_internal_documents(
                     title,
                     content,
                     metadata,
+                    connected_nodes,
                     chunk_index,
                     window_start_chunk_index,
                     window_end_chunk_index,
@@ -167,10 +168,11 @@ def search_internal_documents(
             "title": row[4],
             "content": row[5],
             "metadata": row[6],
-            "chunk_index": row[7],
-            "window_start_chunk_index": row[8],
-            "window_end_chunk_index": row[9],
-            "score": row[10],
+            "connected_nodes": row[7],
+            "chunk_index": row[8],
+            "window_start_chunk_index": row[9],
+            "window_end_chunk_index": row[10],
+            "score": row[11],
         }
         for row in rows
     ]

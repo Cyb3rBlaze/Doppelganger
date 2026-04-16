@@ -13,7 +13,48 @@ from core.vector_store import EmbeddedChunkRecord, build_document_chunk_record
 DEFAULT_BASE_CHUNK_CHAR_LIMIT = 1_800
 DEFAULT_RUNNING_WINDOW_CHAR_LIMIT = 6_000
 DEFAULT_MERGE_SIMILARITY_THRESHOLD = 0.72
+DEFAULT_RELATION_SIMILARITY_THRESHOLD = 0.82
+DEFAULT_ENTITY_OVERLAP_MIN_SHARED = 2
 DEFAULT_METADATA_KEYS = ("doc_id", "email", "resource_key")
+STOPWORDS = {
+    "about",
+    "after",
+    "again",
+    "also",
+    "and",
+    "because",
+    "been",
+    "being",
+    "between",
+    "both",
+    "could",
+    "from",
+    "have",
+    "into",
+    "just",
+    "like",
+    "more",
+    "note",
+    "notes",
+    "over",
+    "that",
+    "their",
+    "them",
+    "then",
+    "there",
+    "these",
+    "this",
+    "those",
+    "through",
+    "very",
+    "what",
+    "when",
+    "where",
+    "which",
+    "with",
+    "would",
+    "your",
+}
 
 
 @dataclass(frozen=True)
@@ -154,6 +195,195 @@ def split_document_into_base_chunks(
 
     chunks = split_text_by_char_budget(document.content, max_chars=max_chars)
     return [BaseChunk(index=index, content=content) for index, content in enumerate(chunks)]
+
+
+def _extract_heading_set(text: str) -> set[str]:
+    """Extract normalized markdown heading text from chunk/window content."""
+    headings: set[str] = set()
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("#"):
+            continue
+        normalized = re.sub(r"\s+", " ", stripped.lstrip("#").strip().lower())
+        if normalized:
+            headings.add(normalized)
+    return headings
+
+
+def _extract_keyword_set(title: str, content: str) -> set[str]:
+    """Extract simple normalized keywords/entities from title and content."""
+    tokens = re.findall(r"[A-Za-z0-9][A-Za-z0-9_-]{2,}", f"{title} {content}".lower())
+    return {
+        token
+        for token in tokens
+        if len(token) >= 4 and token not in STOPWORDS and not token.isdigit()
+    }
+
+
+def _add_connection_signal(
+    connection_map: dict[str, dict[str, Any]],
+    *,
+    target_chunk_id: str,
+    edge_type: str,
+    score: float,
+) -> None:
+    """Add or update one typed connection signal for a target chunk."""
+    entry = connection_map.setdefault(
+        target_chunk_id,
+        {
+            "chunk_id": target_chunk_id,
+            "score": 0.0,
+            "edge_types": [],
+            "signals": {},
+        },
+    )
+    entry["signals"][edge_type] = max(score, entry["signals"].get(edge_type, 0.0))
+    entry["score"] = max(entry["score"], score)
+    if edge_type not in entry["edge_types"]:
+        entry["edge_types"].append(edge_type)
+
+
+def _sort_connected_nodes(connected_nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Sort connected nodes by strongest score, then chunk id, and normalize edge type order."""
+    normalized: list[dict[str, Any]] = []
+    for node in connected_nodes:
+        normalized.append(
+            {
+                "chunk_id": node["chunk_id"],
+                "score": round(float(node["score"]), 6),
+                "edge_types": sorted(node["edge_types"]),
+                "signals": {
+                    key: round(float(value), 6)
+                    for key, value in sorted(node["signals"].items())
+                },
+            }
+        )
+    return sorted(normalized, key=lambda item: (-item["score"], item["chunk_id"]))
+
+
+def attach_connected_nodes(
+    embedded_chunks: list[EmbeddedChunkRecord],
+    *,
+    relation_similarity_threshold: float = DEFAULT_RELATION_SIMILARITY_THRESHOLD,
+    entity_overlap_min_shared: int = DEFAULT_ENTITY_OVERLAP_MIN_SHARED,
+) -> list[EmbeddedChunkRecord]:
+    """Attach graph-style relation metadata to final stored chunk/window rows."""
+    if not embedded_chunks:
+        return []
+    if not 0 <= relation_similarity_threshold <= 1:
+        raise RuntimeError("relation_similarity_threshold must be between 0 and 1.")
+    if entity_overlap_min_shared <= 0:
+        raise RuntimeError("entity_overlap_min_shared must be greater than zero.")
+
+    connection_maps: list[dict[str, dict[str, Any]]] = [dict() for _ in embedded_chunks]
+    keyword_sets = [
+        _extract_keyword_set(chunk.record.title, chunk.record.content) for chunk in embedded_chunks
+    ]
+    heading_sets = [_extract_heading_set(chunk.record.content) for chunk in embedded_chunks]
+
+    for index, chunk in enumerate(embedded_chunks):
+        if index > 0:
+            previous_chunk = embedded_chunks[index - 1]
+            _add_connection_signal(
+                connection_maps[index],
+                target_chunk_id=previous_chunk.record.chunk_id,
+                edge_type="adjacent",
+                score=1.0,
+            )
+        if index + 1 < len(embedded_chunks):
+            next_chunk = embedded_chunks[index + 1]
+            _add_connection_signal(
+                connection_maps[index],
+                target_chunk_id=next_chunk.record.chunk_id,
+                edge_type="adjacent",
+                score=1.0,
+            )
+
+    for left_index, left_chunk in enumerate(embedded_chunks):
+        for right_index in range(left_index + 1, len(embedded_chunks)):
+            right_chunk = embedded_chunks[right_index]
+            _add_connection_signal(
+                connection_maps[left_index],
+                target_chunk_id=right_chunk.record.chunk_id,
+                edge_type="same_document",
+                score=0.2,
+            )
+            _add_connection_signal(
+                connection_maps[right_index],
+                target_chunk_id=left_chunk.record.chunk_id,
+                edge_type="same_document",
+                score=0.2,
+            )
+            semantic_score = cosine_similarity(left_chunk.embedding, right_chunk.embedding)
+            if semantic_score >= relation_similarity_threshold:
+                _add_connection_signal(
+                    connection_maps[left_index],
+                    target_chunk_id=right_chunk.record.chunk_id,
+                    edge_type="semantic",
+                    score=semantic_score,
+                )
+                _add_connection_signal(
+                    connection_maps[right_index],
+                    target_chunk_id=left_chunk.record.chunk_id,
+                    edge_type="semantic",
+                    score=semantic_score,
+                )
+
+            shared_keywords = keyword_sets[left_index] & keyword_sets[right_index]
+            if len(shared_keywords) >= entity_overlap_min_shared:
+                entity_score = min(0.99, 0.5 + 0.1 * len(shared_keywords))
+                _add_connection_signal(
+                    connection_maps[left_index],
+                    target_chunk_id=right_chunk.record.chunk_id,
+                    edge_type="entity_overlap",
+                    score=entity_score,
+                )
+                _add_connection_signal(
+                    connection_maps[right_index],
+                    target_chunk_id=left_chunk.record.chunk_id,
+                    edge_type="entity_overlap",
+                    score=entity_score,
+                )
+
+            if heading_sets[left_index] and heading_sets[left_index] & heading_sets[right_index]:
+                _add_connection_signal(
+                    connection_maps[left_index],
+                    target_chunk_id=right_chunk.record.chunk_id,
+                    edge_type="same_heading",
+                    score=0.9,
+                )
+                _add_connection_signal(
+                    connection_maps[right_index],
+                    target_chunk_id=left_chunk.record.chunk_id,
+                    edge_type="same_heading",
+                    score=0.9,
+                )
+
+    updated_chunks: list[EmbeddedChunkRecord] = []
+    for chunk, connection_map in zip(embedded_chunks, connection_maps, strict=True):
+        updated_chunks.append(
+            EmbeddedChunkRecord(
+                record=build_document_chunk_record(
+                    InternalDocument(
+                        document_id=chunk.record.document_id,
+                        source_path=chunk.record.source_path,
+                        source_kind=chunk.record.source_kind,
+                        title=chunk.record.title,
+                        content=chunk.record.content,
+                        metadata=chunk.record.metadata,
+                    ),
+                    chunk_id=chunk.record.chunk_id,
+                    chunk_index=chunk.record.chunk_index,
+                    window_start_chunk_index=chunk.record.window_start_chunk_index,
+                    window_end_chunk_index=chunk.record.window_end_chunk_index,
+                    content=chunk.record.content,
+                    metadata=chunk.record.metadata,
+                    connected_nodes=_sort_connected_nodes(list(connection_map.values())),
+                ),
+                embedding=chunk.embedding,
+            )
+        )
+    return updated_chunks
 
 
 def _join_window_contents(window_chunks: list[BaseChunk]) -> str:
@@ -310,4 +540,7 @@ def build_adaptive_document_chunk_result(
             window_end_chunk_index=decision_end_index,
         )
     finalize_current_window()
-    return AdaptiveChunkBuildResult(embedded_chunks=results, decisions=decisions)
+    return AdaptiveChunkBuildResult(
+        embedded_chunks=attach_connected_nodes(results),
+        decisions=decisions,
+    )

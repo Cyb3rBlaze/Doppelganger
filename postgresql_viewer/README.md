@@ -29,6 +29,7 @@ postgresql://user:password@host:5432/database?sslmode=require
 - Previews up to 100 rows for the selected object
 - Compresses long cell values like large text fields, JSON, and vectors into compact previews
 - Keeps important path-like fields such as `source_path` visible
+- Adds a graph view for `public.document_chunks` that uses a 2D PCA projection of embeddings and draws `connected_nodes` edges
 - Supports common hosted Postgres URLs that require `sslmode=require`
 
 ## Notes

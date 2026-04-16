@@ -154,3 +154,125 @@ def test_build_adaptive_document_chunk_result_keeps_decision_trace() -> None:
     assert result.decisions[1].window_start_chunk_index == 0
     assert result.decisions[1].window_end_chunk_index == 1
     assert result.decisions[2].merged is False
+
+
+def test_attach_connected_nodes_adds_typed_graph_edges() -> None:
+    document = InternalDocument(
+        document_id="file:test",
+        source_path="/tmp/test.md",
+        source_kind="local_text",
+        title="Acme Strategy",
+        content="unused",
+        metadata={},
+    )
+
+    chunks = [
+        chunking.EmbeddedChunkRecord(
+            record=chunking.build_document_chunk_record(
+                document,
+                chunk_id="file:test:chunk:0",
+                chunk_index=0,
+                window_start_chunk_index=0,
+                window_end_chunk_index=0,
+                content="# Project Acme\nAcme market strategy plan",
+            ),
+            embedding=[1.0, 0.0],
+        ),
+        chunking.EmbeddedChunkRecord(
+            record=chunking.build_document_chunk_record(
+                document,
+                chunk_id="file:test:chunk:1",
+                chunk_index=1,
+                window_start_chunk_index=1,
+                window_end_chunk_index=1,
+                content="# Project Acme\nAcme market roadmap strategy",
+            ),
+            embedding=[0.95, 0.05],
+        ),
+        chunking.EmbeddedChunkRecord(
+            record=chunking.build_document_chunk_record(
+                document,
+                chunk_id="file:test:chunk:2",
+                chunk_index=2,
+                window_start_chunk_index=2,
+                window_end_chunk_index=2,
+                content="Completely different topic",
+            ),
+            embedding=[0.0, 1.0],
+        ),
+    ]
+
+    connected = chunking.attach_connected_nodes(chunks)
+
+    first_connections = connected[0].record.connected_nodes
+    second_connections = connected[1].record.connected_nodes
+    assert first_connections[0]["chunk_id"] == "file:test:chunk:1"
+    assert "adjacent" in first_connections[0]["edge_types"]
+    assert "same_document" in first_connections[0]["edge_types"]
+    assert "semantic" in first_connections[0]["edge_types"]
+    assert "entity_overlap" in first_connections[0]["edge_types"]
+    assert "same_heading" in first_connections[0]["edge_types"]
+    assert first_connections[0]["signals"]["adjacent"] == 1.0
+    assert second_connections[0]["chunk_id"] == "file:test:chunk:0"
+
+
+def test_attach_connected_nodes_keeps_edges_bidirectional() -> None:
+    document = InternalDocument(
+        document_id="file:test",
+        source_path="/tmp/test.md",
+        source_kind="local_text",
+        title="Acme Strategy",
+        content="unused",
+        metadata={},
+    )
+
+    chunks = [
+        chunking.EmbeddedChunkRecord(
+            record=chunking.build_document_chunk_record(
+                document,
+                chunk_id="file:test:chunk:0",
+                chunk_index=0,
+                window_start_chunk_index=0,
+                window_end_chunk_index=0,
+                content="# Project Acme\nAcme market strategy plan",
+            ),
+            embedding=[1.0, 0.0],
+        ),
+        chunking.EmbeddedChunkRecord(
+            record=chunking.build_document_chunk_record(
+                document,
+                chunk_id="file:test:chunk:1",
+                chunk_index=1,
+                window_start_chunk_index=1,
+                window_end_chunk_index=1,
+                content="# Project Acme\nAcme market roadmap strategy",
+            ),
+            embedding=[0.95, 0.05],
+        ),
+        chunking.EmbeddedChunkRecord(
+            record=chunking.build_document_chunk_record(
+                document,
+                chunk_id="file:test:chunk:2",
+                chunk_index=2,
+                window_start_chunk_index=2,
+                window_end_chunk_index=2,
+                content="Completely different topic",
+            ),
+            embedding=[0.0, 1.0],
+        ),
+    ]
+
+    connected = chunking.attach_connected_nodes(chunks)
+    connection_maps = {
+        chunk.record.chunk_id: {
+            node["chunk_id"]: node for node in chunk.record.connected_nodes
+        }
+        for chunk in connected
+    }
+
+    for source_id, targets in connection_maps.items():
+        for target_id, edge in targets.items():
+            reverse_edge = connection_maps[target_id][source_id]
+            assert set(reverse_edge["edge_types"]) == set(edge["edge_types"])
+            assert reverse_edge["signals"] == edge["signals"]
+            assert reverse_edge["score"] == edge["score"]
