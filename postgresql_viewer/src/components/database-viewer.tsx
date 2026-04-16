@@ -27,6 +27,11 @@ type PreviewPayload = {
   rows: Record<string, unknown>[];
 };
 
+type GraphPayload = {
+  nodes: Record<string, unknown>[];
+  edges: Record<string, unknown>[];
+};
+
 type GraphNode = {
   id: string;
   label: string;
@@ -54,6 +59,7 @@ const EXPANDED_PATH_COLUMNS = new Set(["source_path"]);
 const GRAPH_WIDTH = 1000;
 const GRAPH_HEIGHT = 560;
 const GRAPH_PADDING = 48;
+const GRAPH_TABLES = new Set(["document_chunks", "memory_nodes"]);
 
 function tableKey(table: Pick<TableEntry, "schema" | "name">) {
   return `${table.schema}.${table.name}`;
@@ -132,6 +138,46 @@ function parseConnectedNodes(value: unknown): Array<Record<string, unknown>> {
       : [];
   } catch {
     return [];
+  }
+}
+
+function parseStringArray(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.filter((item): item is string => typeof item === "string");
+  }
+
+  if (typeof value !== "string") {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed)
+      ? parsed.filter((item): item is string => typeof item === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function parseSignals(value: unknown): Record<string, number> {
+  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+    return Object.fromEntries(
+      Object.entries(value)
+        .map(([key, nestedValue]) => [key, Number(nestedValue)])
+        .filter((entry): entry is [string, number] => Number.isFinite(entry[1])),
+    );
+  }
+
+  if (typeof value !== "string") {
+    return {};
+  }
+
+  try {
+    const parsed = JSON.parse(value);
+    return parseSignals(parsed);
+  } catch {
+    return {};
   }
 }
 
@@ -278,16 +324,60 @@ function buildPcaProjection(embeddings: number[][]) {
   }));
 }
 
-function buildGraphData(rows: Record<string, unknown>[]) {
+function hashString(value: string) {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
+  }
+  return hash;
+}
+
+function computeFallbackPosition(id: string, index: number) {
+  const hash = hashString(id);
+  const angle = ((hash % 360) * Math.PI) / 180;
+  const radius = 80 + (index % 12) * 18;
+  return {
+    x: Math.cos(angle) * radius,
+    y: Math.sin(angle) * radius,
+  };
+}
+
+function buildGraphData(
+  tableName: string | undefined,
+  rows: Record<string, unknown>[],
+  edgeRows: Record<string, unknown>[] = [],
+) {
   const rawNodes = rows
     .map((row, index) => {
+      if (tableName === "memory_nodes") {
+        const nodeId =
+          typeof row.node_id === "string" ? row.node_id : `node-${index}`;
+        const title =
+          typeof row.title === "string" && row.title.trim()
+            ? row.title.trim()
+            : nodeId;
+        const nodeType = typeof row.node_type === "string" ? row.node_type : "memory_node";
+        const contentPreview =
+          typeof row.content === "string" ? truncateText(row.content, 28) : nodeId;
+        return {
+          id: nodeId,
+          label: title === nodeId ? `${nodeType}: ${contentPreview}` : title,
+          title: `${nodeId} (${nodeType})`,
+          embedding: parseEmbedding(row.embedding),
+          scoreLabel: nodeType,
+          radius:
+            nodeType === "session_summary"
+              ? 14
+              : nodeType === "document_chunk"
+                ? 11
+                : 9,
+          connectedNodes: [] as Array<Record<string, unknown>>,
+        };
+      }
+
       const embedding = parseEmbedding(row.embedding);
       const chunkId =
         typeof row.chunk_id === "string" ? row.chunk_id : `row-${index}`;
-      if (!embedding) {
-        return null;
-      }
-
       const windowStart =
         typeof row.window_start_chunk_index === "number"
           ? row.window_start_chunk_index
@@ -324,9 +414,89 @@ function buildGraphData(rows: Record<string, unknown>[]) {
     return { nodes: [] as GraphNode[], edges: [] as GraphEdge[] };
   }
 
-  const projectedPoints = buildPcaProjection(rawNodes.map((node) => node.embedding));
-  const projectedXs = projectedPoints.map((point) => point.x);
-  const projectedYs = projectedPoints.map((point) => point.y);
+  const seededNodes = rawNodes.filter(
+    (node): node is (typeof rawNodes)[number] & { embedding: number[] } =>
+      Array.isArray(node.embedding) && node.embedding.length > 0,
+  );
+  const projectedSeedPoints = buildPcaProjection(seededNodes.map((node) => node.embedding));
+  const positionedPoints = new Map<string, { x: number; y: number }>();
+  for (let index = 0; index < seededNodes.length; index += 1) {
+    positionedPoints.set(seededNodes[index].id, projectedSeedPoints[index]);
+  }
+
+  const pendingNodes = rawNodes.filter((node) => !positionedPoints.has(node.id));
+  const candidateEdges =
+    tableName === "memory_nodes"
+      ? edgeRows
+          .map((edgeRow, index) => {
+            const sourceId =
+              typeof edgeRow.source_node_id === "string"
+                ? edgeRow.source_node_id
+                : `source-${index}`;
+            const targetId =
+              typeof edgeRow.target_node_id === "string"
+                ? edgeRow.target_node_id
+                : `target-${index}`;
+            return {
+              sourceId,
+              targetId,
+              score:
+                typeof edgeRow.score === "number"
+                  ? edgeRow.score
+                  : Number(edgeRow.score ?? 0),
+              label: parseStringArray(edgeRow.edge_types).join(", "),
+              signals: parseSignals(edgeRow.signals),
+            };
+          })
+          .filter((edge) => edge.sourceId && edge.targetId)
+      : [];
+
+  for (let pass = 0; pass < 3; pass += 1) {
+    for (let index = 0; index < pendingNodes.length; index += 1) {
+      const node = pendingNodes[index];
+      if (positionedPoints.has(node.id)) {
+        continue;
+      }
+
+      const neighborPositions = candidateEdges
+        .flatMap((edge) => {
+          if (edge.sourceId === node.id) {
+            return positionedPoints.has(edge.targetId)
+              ? [positionedPoints.get(edge.targetId)!]
+              : [];
+          }
+          if (edge.targetId === node.id) {
+            return positionedPoints.has(edge.sourceId)
+              ? [positionedPoints.get(edge.sourceId)!]
+              : [];
+          }
+          return [];
+        });
+
+      if (neighborPositions.length === 0) {
+        continue;
+      }
+
+      const averageX =
+        neighborPositions.reduce((sum, point) => sum + point.x, 0) / neighborPositions.length;
+      const averageY =
+        neighborPositions.reduce((sum, point) => sum + point.y, 0) / neighborPositions.length;
+      const fallback = computeFallbackPosition(node.id, index);
+      positionedPoints.set(node.id, {
+        x: averageX + fallback.x * 0.08,
+        y: averageY + fallback.y * 0.08,
+      });
+    }
+  }
+
+  pendingNodes.forEach((node, index) => {
+    if (!positionedPoints.has(node.id)) {
+      positionedPoints.set(node.id, computeFallbackPosition(node.id, index));
+    }
+  });
+
+  const projectedXs = rawNodes.map((node) => positionedPoints.get(node.id)?.x ?? 0);
+  const projectedYs = rawNodes.map((node) => positionedPoints.get(node.id)?.y ?? 0);
   const minX = Math.min(...projectedXs);
   const maxX = Math.max(...projectedXs);
   const minY = Math.min(...projectedYs);
@@ -337,14 +507,14 @@ function buildGraphData(rows: Record<string, unknown>[]) {
     label: truncateText(node.label, 30),
     title: node.title,
     x: scaleCoordinate(
-      projectedPoints[index].x,
+      positionedPoints.get(node.id)?.x ?? computeFallbackPosition(node.id, index).x,
       minX,
       maxX,
       GRAPH_PADDING,
       GRAPH_WIDTH - GRAPH_PADDING,
     ),
     y: scaleCoordinate(
-      projectedPoints[index].y,
+      positionedPoints.get(node.id)?.y ?? computeFallbackPosition(node.id, index).y,
       minY,
       maxY,
       GRAPH_PADDING,
@@ -358,35 +528,55 @@ function buildGraphData(rows: Record<string, unknown>[]) {
   const seenEdges = new Set<string>();
   const edges: GraphEdge[] = [];
 
-  for (const node of rawNodes) {
-    for (const connectedNode of node.connectedNodes) {
-      const targetId =
-        typeof connectedNode.chunk_id === "string" ? connectedNode.chunk_id : "";
-      if (!targetId || !nodeById.has(targetId)) {
+  if (tableName === "memory_nodes") {
+    for (const edge of candidateEdges) {
+      if (!nodeById.has(edge.sourceId) || !nodeById.has(edge.targetId)) {
         continue;
       }
-
-      const edgeId = [node.id, targetId].sort().join("::");
+      const edgeId = [edge.sourceId, edge.targetId].sort().join("::");
       if (seenEdges.has(edgeId)) {
         continue;
       }
       seenEdges.add(edgeId);
-
-      const score =
-        typeof connectedNode.score === "number"
-          ? connectedNode.score
-          : Number(connectedNode.score ?? 0);
-      const edgeTypes = Array.isArray(connectedNode.edge_types)
-        ? connectedNode.edge_types.filter((item): item is string => typeof item === "string")
-        : [];
-
       edges.push({
         id: edgeId,
-        sourceId: node.id,
-        targetId,
-        label: edgeTypes.join(", "),
-        score: Number.isFinite(score) ? score : 0,
+        sourceId: edge.sourceId,
+        targetId: edge.targetId,
+        label: edge.label,
+        score: Number.isFinite(edge.score) ? edge.score : 0,
       });
+    }
+  } else {
+    for (const node of rawNodes) {
+      for (const connectedNode of node.connectedNodes) {
+        const targetId =
+          typeof connectedNode.chunk_id === "string" ? connectedNode.chunk_id : "";
+        if (!targetId || !nodeById.has(targetId)) {
+          continue;
+        }
+
+        const edgeId = [node.id, targetId].sort().join("::");
+        if (seenEdges.has(edgeId)) {
+          continue;
+        }
+        seenEdges.add(edgeId);
+
+        const score =
+          typeof connectedNode.score === "number"
+            ? connectedNode.score
+            : Number(connectedNode.score ?? 0);
+        const edgeTypes = Array.isArray(connectedNode.edge_types)
+          ? connectedNode.edge_types.filter((item): item is string => typeof item === "string")
+          : [];
+
+        edges.push({
+          id: edgeId,
+          sourceId: node.id,
+          targetId,
+          label: edgeTypes.join(", "),
+          score: Number.isFinite(score) ? score : 0,
+        });
+      }
     }
   }
 
@@ -426,6 +616,7 @@ export function DatabaseViewer() {
   const [database, setDatabase] = useState<DatabasePayload | null>(null);
   const [selectedTable, setSelectedTable] = useState<TableEntry | null>(null);
   const [preview, setPreview] = useState<PreviewPayload | null>(null);
+  const [graphPayload, setGraphPayload] = useState<GraphPayload | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
   const [isLoadingPreview, setIsLoadingPreview] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
@@ -433,19 +624,51 @@ export function DatabaseViewer() {
 
   const canRenderGraph =
     selectedTable?.schema === "public" &&
-    selectedTable?.name === "document_chunks" &&
+    GRAPH_TABLES.has(selectedTable?.name ?? "") &&
     Boolean(preview?.rows.length);
 
   const graphData = useMemo(
-    () => buildGraphData(preview?.rows ?? []),
-    [preview],
+    () =>
+      buildGraphData(
+        selectedTable?.name,
+        graphPayload?.nodes ?? preview?.rows ?? [],
+        graphPayload?.edges ?? [],
+      ),
+    [graphPayload, preview, selectedTable],
   );
+
+  async function loadGraphData(table: TableEntry, connectionString: string) {
+    if (!(table.schema === "public" && GRAPH_TABLES.has(table.name))) {
+      setGraphPayload(null);
+      return;
+    }
+
+    const response = await fetch("/api/graph", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        connectionString,
+        schema: table.schema,
+        table: table.name,
+      }),
+    });
+
+    const payload = (await response.json()) as GraphPayload & { error?: string };
+    if (!response.ok) {
+      throw new Error(payload.error ?? "Could not load the graph preview.");
+    }
+
+    setGraphPayload(payload);
+  }
 
   async function loadPreview(table: TableEntry, connectionString: string) {
     setSelectedTable(table);
     setIsLoadingPreview(true);
     setErrorMessage("");
     setPreviewMode("rows");
+    setGraphPayload(null);
 
     try {
       const response = await fetch("/api/preview", {
@@ -467,8 +690,10 @@ export function DatabaseViewer() {
       }
 
       setPreview(payload);
+      await loadGraphData(table, connectionString);
     } catch (error) {
       setPreview(null);
+      setGraphPayload(null);
       setErrorMessage(
         error instanceof Error ? error.message : "Could not load the table preview.",
       );
@@ -652,7 +877,11 @@ export function DatabaseViewer() {
                     <div className={styles.graphLegend}>
                       <span>{graphData.nodes.length} nodes</span>
                       <span>{graphData.edges.length} edges</span>
-                      <span>PCA projection from full embeddings</span>
+                      <span>
+                        {selectedTable?.name === "memory_nodes"
+                          ? "PCA for embedded nodes, neighbor placement for message graph nodes"
+                          : "PCA projection from full embeddings"}
+                      </span>
                     </div>
                     <div className={styles.graphWrap}>
                       <svg

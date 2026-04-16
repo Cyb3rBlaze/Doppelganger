@@ -41,12 +41,14 @@ Targets:
   terminal  Start the local terminal adapter
   telegram  Start the Telegram long-polling adapter
   gmail-auth  Run Gmail OAuth bootstrap and store the token locally
+  unified-memory-migrate  Create unified memory tables and backfill message/doc memory
 
 Examples:
   ./start.sh api
   ./start.sh terminal
   ./start.sh telegram
   ./start.sh gmail-auth
+  ./start.sh unified-memory-migrate
 EOF
 }
 
@@ -67,6 +69,9 @@ case "$CHANNEL" in
     ;;
   gmail-auth)
     exec "$PYTHON_BIN" -m app.tools.gmail_client
+    ;;
+  unified-memory-migrate)
+    exec "$PYTHON_BIN" -m app.services.unified_memory
     ;;
   *)
     echo "Unknown target: $CHANNEL" >&2

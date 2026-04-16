@@ -88,6 +88,7 @@ Other launch targets:
 ./start.sh terminal
 ./start.sh telegram
 ./start.sh gmail-auth
+./start.sh unified-memory-migrate
 ```
 
 ## Memory and Retrieval
@@ -102,6 +103,34 @@ The reply prompt currently includes:
 - the top 5 retrieved internal chunk/window seed matches from the pgvector store plus a 2-hop graph expansion through `connected_nodes` when the message looks knowledge-seeking
 
 After each reply, the app refreshes the current session summary and stores it back on the same row.
+
+## Unified Memory Migration
+
+The repo now also includes a migration foundation in `app/services/unified_memory.py` for moving toward one shared memory graph.
+
+Current status:
+
+- `message_sessions` remains the live session-memory table and is unchanged as the source of truth for conversation history
+- legacy `document_chunks` remains the live internal-doc retrieval table for now
+- new `memory_nodes` and `memory_edges` tables can now be created in the doppelganger Postgres database
+- backfill helpers exist for:
+  - `message_sessions -> memory_nodes/memory_edges`
+  - `document_chunks -> memory_nodes/memory_edges`
+
+This is an incremental migration step. Runtime retrieval still uses the current tables until the unified memory graph is fully wired in.
+
+To create the unified memory graph tables and backfill both current sources:
+
+```bash
+./start.sh unified-memory-migrate
+```
+
+The migration command prints a JSON summary. You can also run narrower backfills directly:
+
+```bash
+python -m app.services.unified_memory --messages-only
+python -m app.services.unified_memory --documents-only
+```
 
 ## Gmail Tools
 
