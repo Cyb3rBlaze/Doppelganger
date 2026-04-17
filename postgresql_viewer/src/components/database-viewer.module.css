@@ -341,12 +341,13 @@
   border-radius: 20px;
   border: 1px solid rgba(72, 59, 48, 0.1);
   background: rgba(255, 255, 255, 0.76);
+  padding: 8px;
 }
 
 .graphSvg {
   display: block;
   width: 100%;
-  min-width: 920px;
+  min-width: 1120px;
   height: auto;
 }
 
@@ -365,7 +366,7 @@
 }
 
 .graphLabel {
-  font-size: 12px;
+  font-size: 11px;
   fill: #4d2f1c;
   font-weight: 700;
 }
@@ -405,6 +406,6 @@
   }
 
   .graphSvg {
-    min-width: 720px;
+    min-width: 860px;
   }
 }

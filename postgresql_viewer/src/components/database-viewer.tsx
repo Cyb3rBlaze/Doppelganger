@@ -56,8 +56,8 @@ const MAX_STRING_PREVIEW = 180;
 const MAX_OBJECT_PREVIEW = 220;
 const MAX_ARRAY_PREVIEW_ITEMS = 6;
 const EXPANDED_PATH_COLUMNS = new Set(["source_path"]);
-const GRAPH_WIDTH = 1000;
-const GRAPH_HEIGHT = 560;
+const GRAPH_WIDTH = 1240;
+const GRAPH_HEIGHT = 720;
 const GRAPH_PADDING = 48;
 const GRAPH_TABLES = new Set(["document_chunks", "memory_nodes"]);
 
@@ -335,7 +335,7 @@ function hashString(value: string) {
 function computeFallbackPosition(id: string, index: number) {
   const hash = hashString(id);
   const angle = ((hash % 360) * Math.PI) / 180;
-  const radius = 80 + (index % 12) * 18;
+  const radius = 110 + (index % 12) * 24;
   return {
     x: Math.cos(angle) * radius,
     y: Math.sin(angle) * radius,
@@ -367,10 +367,10 @@ function buildGraphData(
           scoreLabel: nodeType,
           radius:
             nodeType === "session_summary"
-              ? 14
+              ? 11
               : nodeType === "document_chunk"
-                ? 11
-                : 9,
+                ? 8
+                : 7,
           connectedNodes: [] as Array<Record<string, unknown>>,
         };
       }
@@ -404,7 +404,7 @@ function buildGraphData(
             : typeof row.score === "string"
               ? row.score
               : "",
-        radius: Math.min(18, 7 + span * 2),
+        radius: Math.min(14, 5 + span * 1.4),
         connectedNodes: parseConnectedNodes(row.connected_nodes),
       };
     })
