@@ -20,8 +20,13 @@ LOCAL_DOTENV_PATH = PROJECT_ROOT / ".env"
 FALLBACK_DOTENV_PATH = PROJECT_ROOT.parent / "internal_documents_core" / ".env"
 UNIFIED_MEMORY_DSN_ENV = "POSTGRES_DSN"
 INTERNAL_DOCUMENTS_SOURCE_DSN_ENV = "INTERNAL_DOCUMENTS_POSTGRES_DSN"
+EMBEDDING_MODEL_ENV = "INTERNAL_DOCUMENTS_EMBEDDING_MODEL"
 EMBEDDING_DIMENSION_ENV = "INTERNAL_DOCUMENTS_EMBEDDING_DIMENSION"
+DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"
 DEFAULT_EMBEDDING_DIMENSION = 1536
+DEFAULT_EMBEDDING_BATCH_SIZE = 64
+DEFAULT_MESSAGE_DOCUMENT_EDGE_LIMIT = 5
+DEFAULT_MESSAGE_DOCUMENT_SIMILARITY_THRESHOLD = 0.45
 
 load_dotenv(LOCAL_DOTENV_PATH)
 if FALLBACK_DOTENV_PATH.exists():
@@ -174,6 +179,33 @@ FROM document_chunks
 ORDER BY document_id ASC, chunk_index ASC
 """
 
+DELETE_MESSAGE_DOCUMENT_EDGES_SQL = """
+DELETE FROM memory_edges
+WHERE edge_types @> '["message_document"]'::jsonb
+"""
+
+SELECT_MESSAGE_DOCUMENT_SEMANTIC_EDGE_CANDIDATES_SQL = """
+SELECT
+    message.node_id AS message_node_id,
+    document.node_id AS document_node_id,
+    document.score AS semantic_score
+FROM memory_nodes AS message
+JOIN LATERAL (
+    SELECT
+        candidate.node_id,
+        1 - (candidate.embedding <=> message.embedding) AS score
+    FROM memory_nodes AS candidate
+    WHERE candidate.node_type = 'document_chunk'
+      AND candidate.embedding IS NOT NULL
+    ORDER BY candidate.embedding <=> message.embedding
+    LIMIT %(limit)s
+) AS document ON TRUE
+WHERE message.node_type = 'message'
+  AND message.embedding IS NOT NULL
+  AND document.score >= %(threshold)s
+ORDER BY message.node_id ASC, document.score DESC, document.node_id ASC
+"""
+
 
 @dataclass(frozen=True)
 class MemoryNodeRecord:
@@ -214,6 +246,17 @@ def _load_psycopg() -> Any:
     return psycopg
 
 
+def _load_openai_sdk() -> Any:
+    """Import the OpenAI SDK lazily."""
+    try:
+        from openai import OpenAI
+    except ImportError as exc:
+        raise RuntimeError(
+            "The OpenAI SDK is not installed. Run `pip install -e .` first."
+        ) from exc
+    return OpenAI
+
+
 def get_unified_memory_dsn() -> str | None:
     """Return the target doppelganger Postgres DSN for unified memory."""
     return os.getenv(UNIFIED_MEMORY_DSN_ENV)
@@ -222,6 +265,11 @@ def get_unified_memory_dsn() -> str | None:
 def get_internal_documents_source_dsn() -> str | None:
     """Return the source DSN for the legacy document chunk store."""
     return os.getenv(INTERNAL_DOCUMENTS_SOURCE_DSN_ENV)
+
+
+def get_embedding_model() -> str:
+    """Return the embedding model to use for unified-memory nodes."""
+    return os.getenv(EMBEDDING_MODEL_ENV, DEFAULT_EMBEDDING_MODEL)
 
 
 def get_embedding_dimension() -> int:
@@ -245,6 +293,41 @@ def build_create_memory_nodes_table_sql(embedding_dimension: int) -> str:
     return CREATE_MEMORY_NODES_TABLE_SQL_TEMPLATE.format(
         embedding_dimension=embedding_dimension
     )
+
+
+def build_openai_client() -> Any:
+    """Build an OpenAI client from environment variables."""
+    OpenAI = _load_openai_sdk()
+    return OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+
+def embed_memory_texts(
+    texts: Sequence[str],
+    *,
+    client: Any | None = None,
+    model: str | None = None,
+    dimensions: int | None = None,
+    batch_size: int = DEFAULT_EMBEDDING_BATCH_SIZE,
+) -> list[list[float]]:
+    """Create embeddings for unified-memory node content in stable input order."""
+    if not texts:
+        return []
+
+    resolved_client = client or build_openai_client()
+    resolved_model = model or get_embedding_model()
+    resolved_dimensions = dimensions or get_embedding_dimension()
+    results: list[list[float]] = []
+
+    for start_index in range(0, len(texts), batch_size):
+        batch = list(texts[start_index : start_index + batch_size])
+        response = resolved_client.embeddings.create(
+            model=resolved_model,
+            input=batch,
+            dimensions=resolved_dimensions,
+        )
+        results.extend(list(item.embedding) for item in response.data)
+
+    return results
 
 
 @lru_cache(maxsize=None)
@@ -321,6 +404,66 @@ def _document_chunk_node_id(chunk_id: str) -> str:
     return f"document_chunk:{chunk_id}"
 
 
+def build_message_embedding_text(
+    *,
+    channel: str,
+    conversation_id: str | None,
+    user_id: str | None,
+    session_id: str,
+    event_index: int,
+    event: dict[str, Any],
+) -> str:
+    """Build stable embedding text for a message node."""
+    message_text = str(event.get("text") or "").strip()
+    direction = str(event.get("direction") or "unknown")
+    message_id = str(event.get("message_id") or "")
+    created_at = str(event.get("created_at") or "")
+
+    lines = [
+        "Node type: message",
+        f"Channel: {channel}",
+        f"Conversation ID: {conversation_id or ''}",
+        f"User ID: {user_id or ''}",
+        f"Session ID: {session_id}",
+        f"Event index: {event_index}",
+        f"Direction: {direction}",
+    ]
+    if message_id:
+        lines.append(f"Message ID: {message_id}")
+    if created_at:
+        lines.append(f"Created at: {created_at}")
+    lines.extend(
+        [
+            "",
+            "Message content:",
+            message_text or "(empty message)",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def build_session_summary_embedding_text(
+    *,
+    channel: str,
+    conversation_id: str | None,
+    user_id: str | None,
+    session_id: str,
+    session_summary: str,
+) -> str:
+    """Build stable embedding text for a session-summary node."""
+    lines = [
+        "Node type: session_summary",
+        f"Channel: {channel}",
+        f"Conversation ID: {conversation_id or ''}",
+        f"User ID: {user_id or ''}",
+        f"Session ID: {session_id}",
+        "",
+        "Session summary:",
+        session_summary.strip() or "(empty summary)",
+    ]
+    return "\n".join(lines)
+
+
 def _upsert_memory_node(cursor: Any, node: MemoryNodeRecord) -> None:
     cursor.execute(
         UPSERT_MEMORY_NODE_SQL,
@@ -353,6 +496,66 @@ def _upsert_memory_edge(cursor: Any, edge: MemoryEdgeRecord) -> None:
     )
 
 
+def backfill_message_document_semantic_edges(
+    *,
+    target_dsn: str | None = None,
+    similarity_threshold: float = DEFAULT_MESSAGE_DOCUMENT_SIMILARITY_THRESHOLD,
+    limit_per_message: int = DEFAULT_MESSAGE_DOCUMENT_EDGE_LIMIT,
+) -> dict[str, int]:
+    """Backfill semantic cross-type edges between message nodes and document chunks."""
+    resolved_dsn = target_dsn or get_unified_memory_dsn()
+    if not resolved_dsn:
+        raise RuntimeError(f"{UNIFIED_MEMORY_DSN_ENV} is not set.")
+    if limit_per_message <= 0:
+        raise RuntimeError("limit_per_message must be greater than zero.")
+
+    ensure_unified_memory_schema(resolved_dsn, get_embedding_dimension())
+    psycopg = _load_psycopg()
+    with psycopg.connect(resolved_dsn) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(DELETE_MESSAGE_DOCUMENT_EDGES_SQL)
+            cursor.execute(
+                SELECT_MESSAGE_DOCUMENT_SEMANTIC_EDGE_CANDIDATES_SQL,
+                {
+                    "limit": limit_per_message,
+                    "threshold": similarity_threshold,
+                },
+            )
+            rows = cursor.fetchall()
+
+            edge_count = 0
+            unique_message_ids: set[str] = set()
+            unique_document_ids: set[str] = set()
+
+            for message_node_id, document_node_id, semantic_score in rows:
+                score = float(semantic_score)
+                unique_message_ids.add(message_node_id)
+                unique_document_ids.add(document_node_id)
+                for source_node_id, target_node_id in (
+                    (message_node_id, document_node_id),
+                    (document_node_id, message_node_id),
+                ):
+                    _upsert_memory_edge(
+                        cursor,
+                        MemoryEdgeRecord(
+                            source_node_id=source_node_id,
+                            target_node_id=target_node_id,
+                            score=score,
+                            edge_types=["semantic", "message_document"],
+                            signals={"semantic": score, "message_document": 1.0},
+                        ),
+                    )
+                    edge_count += 1
+
+        connection.commit()
+
+    return {
+        "message_count": len(unique_message_ids),
+        "document_chunk_count": len(unique_document_ids),
+        "edge_count": edge_count,
+    }
+
+
 def backfill_message_sessions_to_unified_memory(
     *,
     target_dsn: str | None = None,
@@ -369,8 +572,9 @@ def backfill_message_sessions_to_unified_memory(
             cursor.execute(SELECT_MESSAGE_SESSIONS_FOR_BACKFILL_SQL)
             rows = cursor.fetchall()
 
-            node_count = 0
-            edge_count = 0
+            pending_nodes: list[tuple[MemoryNodeRecord, str]] = []
+            pending_edges: list[MemoryEdgeRecord] = []
+
             for row in rows:
                 session_id, session_date, channel, user_id, conversation_id, session_summary, raw_history = row
                 message_events = _normalize_json_list(raw_history)
@@ -389,23 +593,30 @@ def backfill_message_sessions_to_unified_memory(
                         "created_at": event_dict.get("created_at"),
                         "message_metadata": _normalize_json_dict(event_dict.get("metadata")),
                     }
-                    _upsert_memory_node(
-                        cursor,
-                        MemoryNodeRecord(
-                            node_id=node_id,
-                            node_type="message",
-                            user_id=user_id,
-                            conversation_id=conversation_id,
-                            session_date=session_date,
-                            source_system="message_sessions",
-                            source_id=f"{session_id}:{event_index}",
-                            title=f"{channel} {event_dict.get('direction') or 'message'}",
-                            content=str(event_dict.get("text") or ""),
-                            metadata=metadata,
-                            embedding=None,
-                        ),
+                    pending_nodes.append(
+                        (
+                            MemoryNodeRecord(
+                                node_id=node_id,
+                                node_type="message",
+                                user_id=user_id,
+                                conversation_id=conversation_id,
+                                session_date=session_date,
+                                source_system="message_sessions",
+                                source_id=f"{session_id}:{event_index}",
+                                title=f"{channel} {event_dict.get('direction') or 'message'}",
+                                content=str(event_dict.get("text") or ""),
+                                metadata=metadata,
+                            ),
+                            build_message_embedding_text(
+                                channel=channel,
+                                conversation_id=conversation_id,
+                                user_id=user_id,
+                                session_id=session_id,
+                                event_index=event_index,
+                                event=event_dict,
+                            ),
+                        )
                     )
-                    node_count += 1
 
                     if event_index > 0:
                         previous_node_id = message_node_ids[event_index - 1]
@@ -413,54 +624,83 @@ def backfill_message_sessions_to_unified_memory(
                             (previous_node_id, node_id),
                             (node_id, previous_node_id),
                         ):
-                            _upsert_memory_edge(
-                                cursor,
+                            pending_edges.append(
                                 MemoryEdgeRecord(
                                     source_node_id=source_node_id,
                                     target_node_id=target_node_id,
                                     score=1.0,
                                     edge_types=["same_session", "session_sequence"],
                                     signals={"same_session": 0.5, "session_sequence": 1.0},
-                                ),
+                                )
                             )
-                            edge_count += 1
 
                 if session_summary:
                     summary_node_id = _summary_node_id(session_id)
-                    _upsert_memory_node(
-                        cursor,
-                        MemoryNodeRecord(
-                            node_id=summary_node_id,
-                            node_type="session_summary",
-                            user_id=user_id,
-                            conversation_id=conversation_id,
-                            session_date=session_date,
-                            source_system="message_sessions",
-                            source_id=f"{session_id}:summary",
-                            title=f"{channel} session summary",
-                            content=session_summary,
-                            metadata={"channel": channel, "session_id": session_id},
-                            embedding=None,
-                        ),
+                    pending_nodes.append(
+                        (
+                            MemoryNodeRecord(
+                                node_id=summary_node_id,
+                                node_type="session_summary",
+                                user_id=user_id,
+                                conversation_id=conversation_id,
+                                session_date=session_date,
+                                source_system="message_sessions",
+                                source_id=f"{session_id}:summary",
+                                title=f"{channel} session summary",
+                                content=session_summary,
+                                metadata={"channel": channel, "session_id": session_id},
+                            ),
+                            build_session_summary_embedding_text(
+                                channel=channel,
+                                conversation_id=conversation_id,
+                                user_id=user_id,
+                                session_id=session_id,
+                                session_summary=session_summary,
+                            ),
+                        )
                     )
-                    node_count += 1
 
                     for message_node_id in message_node_ids:
                         for source_node_id, target_node_id in (
                             (summary_node_id, message_node_id),
                             (message_node_id, summary_node_id),
                         ):
-                            _upsert_memory_edge(
-                                cursor,
+                            pending_edges.append(
                                 MemoryEdgeRecord(
                                     source_node_id=source_node_id,
                                     target_node_id=target_node_id,
                                     score=1.0,
                                     edge_types=["summarizes_session"],
                                     signals={"summarizes_session": 1.0},
-                                ),
+                                )
                             )
-                            edge_count += 1
+
+            embeddings = embed_memory_texts([text for _, text in pending_nodes])
+
+            node_count = 0
+            for (node, _), embedding in zip(pending_nodes, embeddings, strict=True):
+                _upsert_memory_node(
+                    cursor,
+                    MemoryNodeRecord(
+                        node_id=node.node_id,
+                        node_type=node.node_type,
+                        user_id=node.user_id,
+                        conversation_id=node.conversation_id,
+                        session_date=node.session_date,
+                        source_system=node.source_system,
+                        source_id=node.source_id,
+                        title=node.title,
+                        content=node.content,
+                        metadata=node.metadata,
+                        embedding=embedding,
+                    ),
+                )
+                node_count += 1
+
+            edge_count = 0
+            for edge in pending_edges:
+                _upsert_memory_edge(cursor, edge)
+                edge_count += 1
 
         connection.commit()
 
@@ -578,12 +818,14 @@ def backfill_all_to_unified_memory() -> dict[str, Any]:
     ensure_unified_memory_schema(target_dsn, get_embedding_dimension())
     message_result = backfill_message_sessions_to_unified_memory(target_dsn=target_dsn)
     document_result = backfill_document_chunks_to_unified_memory(target_dsn=target_dsn)
+    cross_type_result = backfill_message_document_semantic_edges(target_dsn=target_dsn)
     return {
         "status": "ok",
         "target_dsn_env": UNIFIED_MEMORY_DSN_ENV,
         "document_source_dsn_env": INTERNAL_DOCUMENTS_SOURCE_DSN_ENV,
         "message_sessions": message_result,
         "document_chunks": document_result,
+        "message_document_edges": cross_type_result,
     }
 
 
@@ -627,6 +869,9 @@ def main(argv: Sequence[str] | None = None) -> None:
             "status": "ok",
             "target_dsn_env": UNIFIED_MEMORY_DSN_ENV,
             "message_sessions": backfill_message_sessions_to_unified_memory(target_dsn=target_dsn),
+            "message_document_edges": backfill_message_document_semantic_edges(
+                target_dsn=target_dsn
+            ),
         }
     elif args.documents_only:
         result = {
@@ -634,6 +879,9 @@ def main(argv: Sequence[str] | None = None) -> None:
             "target_dsn_env": UNIFIED_MEMORY_DSN_ENV,
             "document_source_dsn_env": INTERNAL_DOCUMENTS_SOURCE_DSN_ENV,
             "document_chunks": backfill_document_chunks_to_unified_memory(target_dsn=target_dsn),
+            "message_document_edges": backfill_message_document_semantic_edges(
+                target_dsn=target_dsn
+            ),
         }
     else:
         result = backfill_all_to_unified_memory()

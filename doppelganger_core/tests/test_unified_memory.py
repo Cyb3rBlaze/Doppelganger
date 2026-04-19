@@ -113,6 +113,11 @@ def test_backfill_message_sessions_to_unified_memory_inserts_nodes_and_edges(mon
     psycopg = FakePsycopg(connection)
 
     monkeypatch.setattr(unified_memory, "_load_psycopg", lambda: psycopg)
+    monkeypatch.setattr(
+        unified_memory,
+        "embed_memory_texts",
+        lambda texts, **kwargs: [[float(index + 1), float(index + 2)] for index, _ in enumerate(texts)],
+    )
     monkeypatch.setenv("POSTGRES_DSN", "postgresql://localhost/doppelganger")
 
     result = unified_memory.backfill_message_sessions_to_unified_memory()
@@ -138,9 +143,11 @@ def test_backfill_message_sessions_to_unified_memory_inserts_nodes_and_edges(mon
     assert first_message_params["node_id"] == "message:api:anshul:thread-1:2026-04-14:0"
     assert first_message_params["node_type"] == "message"
     assert first_message_params["content"] == "hello"
+    assert first_message_params["embedding"] == "[1.0,2.0]"
     summary_params = inserted_node_calls[2][1]
     assert summary_params["node_id"] == "session_summary:api:anshul:thread-1:2026-04-14"
     assert summary_params["node_type"] == "session_summary"
+    assert summary_params["embedding"] == "[3.0,4.0]"
 
 
 def test_backfill_document_chunks_to_unified_memory_inserts_nodes_and_edges(monkeypatch) -> None:
@@ -204,6 +211,51 @@ def test_backfill_document_chunks_to_unified_memory_inserts_nodes_and_edges(monk
     assert inserted_edge_call[1]["target_node_id"] == "document_chunk:gdoc:abc123:chunk:1"
 
 
+def test_backfill_message_document_semantic_edges_inserts_bidirectional_cross_type_edges(
+    monkeypatch,
+) -> None:
+    unified_memory.ensure_unified_memory_schema.cache_clear()
+    cursor = FakeCursor(
+        fetchall_result=[
+            ("message:telegram:1", "document_chunk:gdoc:abc:chunk:0", 0.88),
+            ("message:telegram:1", "document_chunk:gdoc:abc:chunk:1", 0.64),
+        ]
+    )
+    connection = FakeConnection(cursor)
+    psycopg = FakePsycopg(connection)
+
+    monkeypatch.setattr(unified_memory, "_load_psycopg", lambda: psycopg)
+    monkeypatch.setenv("POSTGRES_DSN", "postgresql://localhost/doppelganger")
+
+    result = unified_memory.backfill_message_document_semantic_edges()
+
+    assert result == {
+        "message_count": 1,
+        "document_chunk_count": 2,
+        "edge_count": 4,
+    }
+    assert psycopg.calls == [
+        "postgresql://localhost/doppelganger",
+        "postgresql://localhost/doppelganger",
+    ]
+    assert any(
+        sql.strip().startswith("DELETE FROM memory_edges") for sql, _ in cursor.executed
+    )
+    assert any("FROM memory_nodes AS message" in sql for sql, _ in cursor.executed)
+    inserted_edge_calls = [
+        entry for entry in cursor.executed if entry[0].strip().startswith("INSERT INTO memory_edges")
+    ]
+    assert len(inserted_edge_calls) == 4
+    first_edge_params = inserted_edge_calls[0][1]
+    assert first_edge_params["source_node_id"] == "message:telegram:1"
+    assert first_edge_params["target_node_id"] == "document_chunk:gdoc:abc:chunk:0"
+    assert json.loads(first_edge_params["edge_types"]) == ["semantic", "message_document"]
+    assert json.loads(first_edge_params["signals"]) == {
+        "semantic": 0.88,
+        "message_document": 1.0,
+    }
+
+
 def test_main_prints_json_summary_for_full_backfill(monkeypatch, capsys) -> None:
     monkeypatch.setattr(
         unified_memory,
@@ -227,6 +279,15 @@ def test_main_prints_json_summary_for_full_backfill(monkeypatch, capsys) -> None
         "backfill_document_chunks_to_unified_memory",
         lambda target_dsn=None: {"chunk_count": 4, "node_count": 4, "edge_count": 5},
     )
+    monkeypatch.setattr(
+        unified_memory,
+        "backfill_message_document_semantic_edges",
+        lambda target_dsn=None: {
+            "message_count": 2,
+            "document_chunk_count": 3,
+            "edge_count": 6,
+        },
+    )
 
     unified_memory.main([])
 
@@ -239,3 +300,4 @@ def test_main_prints_json_summary_for_full_backfill(monkeypatch, capsys) -> None
     assert payload["status"] == "ok"
     assert payload["message_sessions"]["session_count"] == 1
     assert payload["document_chunks"]["chunk_count"] == 4
+    assert payload["message_document_edges"]["edge_count"] == 6

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import styles from "./database-viewer.module.css";
 
@@ -36,8 +36,10 @@ type GraphNode = {
   id: string;
   label: string;
   title: string;
+  nodeType: string;
   x: number;
   y: number;
+  z: number;
   radius: number;
   scoreLabel: string;
 };
@@ -48,6 +50,7 @@ type GraphEdge = {
   targetId: string;
   label: string;
   score: number;
+  edgeTypes: string[];
 };
 
 type PreviewMode = "rows" | "graph";
@@ -58,8 +61,22 @@ const MAX_ARRAY_PREVIEW_ITEMS = 6;
 const EXPANDED_PATH_COLUMNS = new Set(["source_path"]);
 const GRAPH_WIDTH = 1240;
 const GRAPH_HEIGHT = 720;
-const GRAPH_PADDING = 48;
 const GRAPH_TABLES = new Set(["document_chunks", "memory_nodes"]);
+const GRAPH_CAMERA_DISTANCE = 3.6;
+const GRAPH_ZOOM_MIN = 0.1;
+const GRAPH_ZOOM_MAX = 10;
+const DEFAULT_GRAPH_ZOOM = 1.8;
+
+function reconcileVisibilityMap(
+  current: Record<string, boolean>,
+  keys: string[],
+) {
+  const next: Record<string, boolean> = {};
+  for (const key of keys) {
+    next[key] = current[key] ?? true;
+  }
+  return next;
+}
 
 function tableKey(table: Pick<TableEntry, "schema" | "name">) {
   return `${table.schema}.${table.name}`;
@@ -181,21 +198,6 @@ function parseSignals(value: unknown): Record<string, number> {
   }
 }
 
-function scaleCoordinate(
-  value: number,
-  min: number,
-  max: number,
-  outputMin: number,
-  outputMax: number,
-) {
-  if (max === min) {
-    return (outputMin + outputMax) / 2;
-  }
-
-  const ratio = (value - min) / (max - min);
-  return outputMin + ratio * (outputMax - outputMin);
-}
-
 function dotProduct(left: number[], right: number[]) {
   let sum = 0;
   for (let index = 0; index < left.length; index += 1) {
@@ -229,7 +231,7 @@ function subtractScaledOuterProduct(
   }
 }
 
-function buildPcaProjection(embeddings: number[][]) {
+function buildPcaProjection(embeddings: number[][], componentCount: number) {
   if (embeddings.length === 0) {
     return [];
   }
@@ -255,7 +257,7 @@ function buildPcaProjection(embeddings: number[][]) {
   }
 
   const scoresByComponent: number[][] = [];
-  const maxComponents = Math.min(2, centered.length, dimensionCount);
+  const maxComponents = Math.min(componentCount, centered.length, dimensionCount);
 
   for (let componentIndex = 0; componentIndex < maxComponents; componentIndex += 1) {
     let scores = centered.map((embedding) => embedding[componentIndex] ?? 0);
@@ -321,6 +323,7 @@ function buildPcaProjection(embeddings: number[][]) {
   return embeddings.map((_, index) => ({
     x: scoresByComponent[0]?.[index] ?? 0,
     y: scoresByComponent[1]?.[index] ?? 0,
+    z: scoresByComponent[2]?.[index] ?? 0,
   }));
 }
 
@@ -335,11 +338,74 @@ function hashString(value: string) {
 function computeFallbackPosition(id: string, index: number) {
   const hash = hashString(id);
   const angle = ((hash % 360) * Math.PI) / 180;
+  const elevation = (((hash >> 8) % 180) - 90) * (Math.PI / 180);
   const radius = 110 + (index % 12) * 24;
   return {
-    x: Math.cos(angle) * radius,
-    y: Math.sin(angle) * radius,
+    x: Math.cos(angle) * Math.cos(elevation) * radius,
+    y: Math.sin(angle) * Math.cos(elevation) * radius,
+    z: Math.sin(elevation) * radius * 0.7,
   };
+}
+
+function normalize3dPoints(points: Array<{ x: number; y: number; z: number }>) {
+  if (points.length === 0) {
+    return points;
+  }
+
+  const maxAbs = Math.max(
+    ...points.map((point) => Math.max(Math.abs(point.x), Math.abs(point.y), Math.abs(point.z))),
+  );
+
+  if (maxAbs === 0) {
+    return points.map(() => ({ x: 0, y: 0, z: 0 }));
+  }
+
+  return points.map((point) => ({
+    x: point.x / maxAbs,
+    y: point.y / maxAbs,
+    z: point.z / maxAbs,
+  }));
+}
+
+function rotatePoint3d(
+  point: { x: number; y: number; z: number },
+  { yaw, pitch }: { yaw: number; pitch: number },
+) {
+  const cosYaw = Math.cos(yaw);
+  const sinYaw = Math.sin(yaw);
+  const cosPitch = Math.cos(pitch);
+  const sinPitch = Math.sin(pitch);
+
+  const yawX = point.x * cosYaw - point.z * sinYaw;
+  const yawZ = point.x * sinYaw + point.z * cosYaw;
+  const pitchY = point.y * cosPitch - yawZ * sinPitch;
+  const pitchZ = point.y * sinPitch + yawZ * cosPitch;
+
+  return {
+    x: yawX,
+    y: pitchY,
+    z: pitchZ,
+  };
+}
+
+function projectGraphScene(
+  nodes: GraphNode[],
+  { yaw, pitch, zoom }: { yaw: number; pitch: number; zoom: number },
+) {
+  const projectedNodes = nodes.map((node) => {
+    const rotated = rotatePoint3d(node, { yaw, pitch });
+    const perspectiveScale =
+      (GRAPH_WIDTH * 0.34 * zoom) / (GRAPH_CAMERA_DISTANCE - rotated.z);
+    return {
+      ...node,
+      projectedX: GRAPH_WIDTH / 2 + rotated.x * perspectiveScale,
+      projectedY: GRAPH_HEIGHT / 2 + rotated.y * perspectiveScale,
+      projectedRadius: Math.max(3.2, node.radius * (0.62 + perspectiveScale / 220)),
+      depth: rotated.z,
+    };
+  });
+
+  return projectedNodes.sort((left, right) => left.depth - right.depth);
 }
 
 function buildGraphData(
@@ -363,6 +429,7 @@ function buildGraphData(
           id: nodeId,
           label: title === nodeId ? `${nodeType}: ${contentPreview}` : title,
           title: `${nodeId} (${nodeType})`,
+          nodeType,
           embedding: parseEmbedding(row.embedding),
           scoreLabel: nodeType,
           radius:
@@ -397,6 +464,7 @@ function buildGraphData(
             ? row.title.trim()
             : chunkId,
         title: chunkId,
+        nodeType: "document_chunk",
         embedding,
         scoreLabel:
           typeof row.score === "number"
@@ -418,8 +486,11 @@ function buildGraphData(
     (node): node is (typeof rawNodes)[number] & { embedding: number[] } =>
       Array.isArray(node.embedding) && node.embedding.length > 0,
   );
-  const projectedSeedPoints = buildPcaProjection(seededNodes.map((node) => node.embedding));
-  const positionedPoints = new Map<string, { x: number; y: number }>();
+  const projectedSeedPoints = buildPcaProjection(
+    seededNodes.map((node) => node.embedding),
+    3,
+  );
+  const positionedPoints = new Map<string, { x: number; y: number; z: number }>();
   for (let index = 0; index < seededNodes.length; index += 1) {
     positionedPoints.set(seededNodes[index].id, projectedSeedPoints[index]);
   }
@@ -444,6 +515,7 @@ function buildGraphData(
                 typeof edgeRow.score === "number"
                   ? edgeRow.score
                   : Number(edgeRow.score ?? 0),
+              edgeTypes: parseStringArray(edgeRow.edge_types),
               label: parseStringArray(edgeRow.edge_types).join(", "),
               signals: parseSignals(edgeRow.signals),
             };
@@ -481,10 +553,13 @@ function buildGraphData(
         neighborPositions.reduce((sum, point) => sum + point.x, 0) / neighborPositions.length;
       const averageY =
         neighborPositions.reduce((sum, point) => sum + point.y, 0) / neighborPositions.length;
+      const averageZ =
+        neighborPositions.reduce((sum, point) => sum + point.z, 0) / neighborPositions.length;
       const fallback = computeFallbackPosition(node.id, index);
       positionedPoints.set(node.id, {
         x: averageX + fallback.x * 0.08,
         y: averageY + fallback.y * 0.08,
+        z: averageZ + fallback.z * 0.08,
       });
     }
   }
@@ -495,31 +570,18 @@ function buildGraphData(
     }
   });
 
-  const projectedXs = rawNodes.map((node) => positionedPoints.get(node.id)?.x ?? 0);
-  const projectedYs = rawNodes.map((node) => positionedPoints.get(node.id)?.y ?? 0);
-  const minX = Math.min(...projectedXs);
-  const maxX = Math.max(...projectedXs);
-  const minY = Math.min(...projectedYs);
-  const maxY = Math.max(...projectedYs);
+  const normalizedPoints = normalize3dPoints(
+    rawNodes.map((node, index) => positionedPoints.get(node.id) ?? computeFallbackPosition(node.id, index)),
+  );
 
   const nodes: GraphNode[] = rawNodes.map((node, index) => ({
     id: node.id,
     label: truncateText(node.label, 30),
     title: node.title,
-    x: scaleCoordinate(
-      positionedPoints.get(node.id)?.x ?? computeFallbackPosition(node.id, index).x,
-      minX,
-      maxX,
-      GRAPH_PADDING,
-      GRAPH_WIDTH - GRAPH_PADDING,
-    ),
-    y: scaleCoordinate(
-      positionedPoints.get(node.id)?.y ?? computeFallbackPosition(node.id, index).y,
-      minY,
-      maxY,
-      GRAPH_PADDING,
-      GRAPH_HEIGHT - GRAPH_PADDING,
-    ),
+    nodeType: node.nodeType,
+    x: normalizedPoints[index].x,
+    y: normalizedPoints[index].y,
+    z: normalizedPoints[index].z,
     radius: node.radius,
     scoreLabel: node.scoreLabel,
   }));
@@ -544,6 +606,7 @@ function buildGraphData(
         targetId: edge.targetId,
         label: edge.label,
         score: Number.isFinite(edge.score) ? edge.score : 0,
+        edgeTypes: edge.edgeTypes,
       });
     }
   } else {
@@ -575,6 +638,7 @@ function buildGraphData(
           targetId,
           label: edgeTypes.join(", "),
           score: Number.isFinite(score) ? score : 0,
+          edgeTypes,
         });
       }
     }
@@ -621,6 +685,13 @@ export function DatabaseViewer() {
   const [isLoadingPreview, setIsLoadingPreview] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
   const [previewMode, setPreviewMode] = useState<PreviewMode>("rows");
+  const [graphYaw, setGraphYaw] = useState(0.55);
+  const [graphPitch, setGraphPitch] = useState(-0.32);
+  const [graphZoom, setGraphZoom] = useState(DEFAULT_GRAPH_ZOOM);
+  const [showGraphLabels, setShowGraphLabels] = useState(true);
+  const [visibleNodeTypes, setVisibleNodeTypes] = useState<Record<string, boolean>>({});
+  const [visibleEdgeTypes, setVisibleEdgeTypes] = useState<Record<string, boolean>>({});
+  const dragStateRef = useRef<{ x: number; y: number } | null>(null);
 
   const canRenderGraph =
     selectedTable?.schema === "public" &&
@@ -636,6 +707,122 @@ export function DatabaseViewer() {
       ),
     [graphPayload, preview, selectedTable],
   );
+  const availableNodeTypes = useMemo(
+    () =>
+      [...new Set(graphData.nodes.map((node) => node.nodeType))]
+        .filter(Boolean)
+        .sort(),
+    [graphData.nodes],
+  );
+  const availableEdgeTypes = useMemo(
+    () =>
+      [...new Set(graphData.edges.flatMap((edge) => edge.edgeTypes))]
+        .filter(Boolean)
+        .sort(),
+    [graphData.edges],
+  );
+  const filteredGraphNodes = useMemo(
+    () =>
+      graphData.nodes.filter((node) => visibleNodeTypes[node.nodeType] ?? true),
+    [graphData.nodes, visibleNodeTypes],
+  );
+  const filteredNodeIds = useMemo(
+    () => new Set(filteredGraphNodes.map((node) => node.id)),
+    [filteredGraphNodes],
+  );
+  const filteredGraphEdges = useMemo(
+    () =>
+      graphData.edges.filter((edge) => {
+        if (!filteredNodeIds.has(edge.sourceId) || !filteredNodeIds.has(edge.targetId)) {
+          return false;
+        }
+        if (edge.edgeTypes.length === 0) {
+          return true;
+        }
+        return edge.edgeTypes.some((edgeType) => visibleEdgeTypes[edgeType] ?? true);
+      }),
+    [filteredNodeIds, graphData.edges, visibleEdgeTypes],
+  );
+
+  useEffect(() => {
+    setVisibleNodeTypes((current) => reconcileVisibilityMap(current, availableNodeTypes));
+  }, [availableNodeTypes]);
+
+  useEffect(() => {
+    setVisibleEdgeTypes((current) => reconcileVisibilityMap(current, availableEdgeTypes));
+  }, [availableEdgeTypes]);
+
+  const projectedGraphNodes = useMemo(
+    () =>
+      projectGraphScene(filteredGraphNodes, {
+        yaw: graphYaw,
+        pitch: graphPitch,
+        zoom: graphZoom,
+      }),
+    [filteredGraphNodes, graphPitch, graphYaw, graphZoom],
+  );
+  const projectedNodeById = useMemo(
+    () => new Map(projectedGraphNodes.map((node) => [node.id, node])),
+    [projectedGraphNodes],
+  );
+
+  function resetGraphView() {
+    setGraphYaw(0.55);
+    setGraphPitch(-0.32);
+    setGraphZoom(DEFAULT_GRAPH_ZOOM);
+  }
+
+  function zoomGraphBy(delta: number) {
+    setGraphZoom((current) =>
+      Math.max(GRAPH_ZOOM_MIN, Math.min(GRAPH_ZOOM_MAX, current + delta)),
+    );
+  }
+
+  function toggleNodeType(nodeType: string) {
+    setVisibleNodeTypes((current) => ({
+      ...current,
+      [nodeType]: !(current[nodeType] ?? true),
+    }));
+  }
+
+  function toggleEdgeType(edgeType: string) {
+    setVisibleEdgeTypes((current) => ({
+      ...current,
+      [edgeType]: !(current[edgeType] ?? true),
+    }));
+  }
+
+  function handleGraphPointerDown(event: React.PointerEvent<SVGSVGElement>) {
+    dragStateRef.current = { x: event.clientX, y: event.clientY };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function handleGraphPointerMove(event: React.PointerEvent<SVGSVGElement>) {
+    if (!dragStateRef.current) {
+      return;
+    }
+
+    const deltaX = event.clientX - dragStateRef.current.x;
+    const deltaY = event.clientY - dragStateRef.current.y;
+    dragStateRef.current = { x: event.clientX, y: event.clientY };
+    setGraphYaw((current) => current + deltaX * 0.008);
+    setGraphPitch((current) =>
+      Math.max(-1.25, Math.min(1.25, current - deltaY * 0.008)),
+    );
+  }
+
+  function handleGraphPointerUp(event: React.PointerEvent<SVGSVGElement>) {
+    dragStateRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  }
+
+  function handleGraphWheel(event: React.WheelEvent<SVGSVGElement>) {
+    event.preventDefault();
+    const zoomDelta = event.deltaY > 0 ? -0.1 : 0.1;
+    zoomGraphBy(zoomDelta);
+  }
 
   async function loadGraphData(table: TableEntry, connectionString: string) {
     if (!(table.schema === "public" && GRAPH_TABLES.has(table.name))) {
@@ -669,6 +856,7 @@ export function DatabaseViewer() {
     setErrorMessage("");
     setPreviewMode("rows");
     setGraphPayload(null);
+    resetGraphView();
 
     try {
       const response = await fetch("/api/preview", {
@@ -875,19 +1063,106 @@ export function DatabaseViewer() {
                 graphData.nodes.length > 0 ? (
                   <div className={styles.graphPanel}>
                     <div className={styles.graphLegend}>
-                      <span>{graphData.nodes.length} nodes</span>
-                      <span>{graphData.edges.length} edges</span>
+                      <span>{filteredGraphNodes.length} / {graphData.nodes.length} nodes</span>
+                      <span>{filteredGraphEdges.length} / {graphData.edges.length} edges</span>
                       <span>
                         {selectedTable?.name === "memory_nodes"
                           ? "PCA for embedded nodes, neighbor placement for message graph nodes"
                           : "PCA projection from full embeddings"}
                       </span>
                     </div>
+                    <div className={styles.graphControls}>
+                      <span>Drag to rotate</span>
+                      <span>Scroll to zoom</span>
+                      <div className={styles.graphButtonGroup}>
+                        <button
+                          className={styles.graphControlButton}
+                          onClick={() => zoomGraphBy(0.2)}
+                          type="button"
+                        >
+                          Zoom In
+                        </button>
+                        <button
+                          className={styles.graphControlButton}
+                          onClick={() => zoomGraphBy(-0.2)}
+                          type="button"
+                        >
+                          Zoom Out
+                        </button>
+                      </div>
+                      <button
+                        className={styles.graphResetButton}
+                        onClick={() => setShowGraphLabels((current) => !current)}
+                        type="button"
+                      >
+                        {showGraphLabels ? "Hide Labels" : "Show Labels"}
+                      </button>
+                      <button
+                        className={styles.graphResetButton}
+                        onClick={resetGraphView}
+                        type="button"
+                      >
+                        Reset View
+                      </button>
+                    </div>
+                    {availableNodeTypes.length > 0 ? (
+                      <div className={styles.graphFilterGroup}>
+                        <p className={styles.graphFilterLabel}>Node Types</p>
+                        <div className={styles.graphFilterChips}>
+                          {availableNodeTypes.map((nodeType) => {
+                            const active = visibleNodeTypes[nodeType] ?? true;
+                            return (
+                              <button
+                                key={nodeType}
+                                className={
+                                  active
+                                    ? styles.graphFilterChipActive
+                                    : styles.graphFilterChip
+                                }
+                                onClick={() => toggleNodeType(nodeType)}
+                                type="button"
+                              >
+                                {nodeType}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ) : null}
+                    {availableEdgeTypes.length > 0 ? (
+                      <div className={styles.graphFilterGroup}>
+                        <p className={styles.graphFilterLabel}>Edge Types</p>
+                        <div className={styles.graphFilterChips}>
+                          {availableEdgeTypes.map((edgeType) => {
+                            const active = visibleEdgeTypes[edgeType] ?? true;
+                            return (
+                              <button
+                                key={edgeType}
+                                className={
+                                  active
+                                    ? styles.graphFilterChipActive
+                                    : styles.graphFilterChip
+                                }
+                                onClick={() => toggleEdgeType(edgeType)}
+                                type="button"
+                              >
+                                {edgeType}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ) : null}
                     <div className={styles.graphWrap}>
                       <svg
                         aria-label="Embedding graph"
                         className={styles.graphSvg}
                         viewBox={`0 0 ${GRAPH_WIDTH} ${GRAPH_HEIGHT}`}
+                        onPointerDown={handleGraphPointerDown}
+                        onPointerMove={handleGraphPointerMove}
+                        onPointerUp={handleGraphPointerUp}
+                        onPointerLeave={handleGraphPointerUp}
+                        onWheel={handleGraphWheel}
                       >
                         <rect
                           x="0"
@@ -897,9 +1172,9 @@ export function DatabaseViewer() {
                           rx="24"
                           className={styles.graphBackdrop}
                         />
-                        {graphData.edges.map((edge) => {
-                          const source = graphData.nodes.find((node) => node.id === edge.sourceId);
-                          const target = graphData.nodes.find((node) => node.id === edge.targetId);
+                        {filteredGraphEdges.map((edge) => {
+                          const source = projectedNodeById.get(edge.sourceId);
+                          const target = projectedNodeById.get(edge.targetId);
                           if (!source || !target) {
                             return null;
                           }
@@ -907,12 +1182,13 @@ export function DatabaseViewer() {
                           return (
                             <line
                               key={edge.id}
-                              x1={source.x}
-                              y1={source.y}
-                              x2={target.x}
-                              y2={target.y}
+                              x1={source.projectedX}
+                              y1={source.projectedY}
+                              x2={target.projectedX}
+                              y2={target.projectedY}
                               className={styles.graphEdge}
-                              strokeWidth={1 + Math.min(2.5, edge.score * 2)}
+                              strokeWidth={0.8 + Math.min(2.2, edge.score * 1.8)}
+                              opacity={0.2 + ((source.depth + target.depth + 2) / 4) * 0.5}
                             >
                               <title>
                                 {`${source.title} ↔ ${target.title}\n${edge.label} (${edge.score.toFixed(3)})`}
@@ -920,26 +1196,30 @@ export function DatabaseViewer() {
                             </line>
                           );
                         })}
-                        {graphData.nodes.map((node) => (
+                        {projectedGraphNodes.map((node) => (
                           <g key={node.id}>
                             <circle
-                              cx={node.x}
-                              cy={node.y}
-                              r={node.radius}
+                              cx={node.projectedX}
+                              cy={node.projectedY}
+                              r={node.projectedRadius}
                               className={styles.graphNode}
+                              opacity={0.36 + ((node.depth + 1) / 2) * 0.64}
                             >
                               <title>
                                 {`${node.title}\nscore: ${node.scoreLabel || "n/a"}`}
                               </title>
                             </circle>
-                            <text
-                              x={node.x}
-                              y={node.y + node.radius + 16}
-                              textAnchor="middle"
-                              className={styles.graphLabel}
-                            >
-                              {node.label}
-                            </text>
+                            {showGraphLabels ? (
+                              <text
+                                x={node.projectedX}
+                                y={node.projectedY + node.projectedRadius + 14}
+                                textAnchor="middle"
+                                className={styles.graphLabel}
+                                opacity={0.5 + ((node.depth + 1) / 2) * 0.5}
+                              >
+                                {node.label}
+                              </text>
+                            ) : null}
                           </g>
                         ))}
                       </svg>

@@ -8,6 +8,8 @@ type GraphRequest = {
   table?: string;
 };
 
+const GRAPH_NODE_LIMIT = 2000;
+
 function normalizeValue(value: unknown): unknown {
   if (value === null || value === undefined) {
     return null;
@@ -67,7 +69,7 @@ export async function POST(request: Request) {
             select *
             from ${safeTableReference}
             order by document_id asc, chunk_index asc
-            limit 200
+            limit ${GRAPH_NODE_LIMIT}
           `,
         );
 
@@ -85,8 +87,8 @@ export async function POST(request: Request) {
         `
           select *
           from ${safeTableReference}
-          order by created_at desc, node_id asc
-          limit 200
+          order by node_type asc, created_at asc, node_id asc
+          limit ${GRAPH_NODE_LIMIT}
         `,
       );
 

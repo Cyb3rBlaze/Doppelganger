@@ -116,6 +116,8 @@ Current status:
 - backfill helpers exist for:
   - `message_sessions -> memory_nodes/memory_edges`
   - `document_chunks -> memory_nodes/memory_edges`
+- message and session-summary nodes are embedded during backfill so the unified graph can place them meaningfully in vector-based views
+- after both node types are present, the migration also creates semantic `message_document` edges between message nodes and relevant internal document chunks
 
 This is an incremental migration step. Runtime retrieval still uses the current tables until the unified memory graph is fully wired in.
 
@@ -123,6 +125,13 @@ To create the unified memory graph tables and backfill both current sources:
 
 ```bash
 ./start.sh unified-memory-migrate
+```
+
+To run one dream-mode pass that compares embedded memory nodes broadly and adds new
+`dream` edges for strong semantic/relevance matches:
+
+```bash
+./start.sh dream-mode
 ```
 
 The migration command prints a JSON summary. You can also run narrower backfills directly:

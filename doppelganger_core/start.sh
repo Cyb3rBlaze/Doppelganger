@@ -42,6 +42,7 @@ Targets:
   telegram  Start the Telegram long-polling adapter
   gmail-auth  Run Gmail OAuth bootstrap and store the token locally
   unified-memory-migrate  Create unified memory tables and backfill message/doc memory
+  dream-mode  Run one dream-mode pass over unified memory and add dream edges
 
 Examples:
   ./start.sh api
@@ -49,6 +50,7 @@ Examples:
   ./start.sh telegram
   ./start.sh gmail-auth
   ./start.sh unified-memory-migrate
+  ./start.sh dream-mode
 EOF
 }
 
@@ -72,6 +74,9 @@ case "$CHANNEL" in
     ;;
   unified-memory-migrate)
     exec "$PYTHON_BIN" -m app.services.unified_memory
+    ;;
+  dream-mode)
+    exec "$PYTHON_BIN" -m app.services.dream_mode
     ;;
   *)
     echo "Unknown target: $CHANNEL" >&2

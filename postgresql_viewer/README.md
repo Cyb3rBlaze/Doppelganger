@@ -29,8 +29,8 @@ postgresql://user:password@host:5432/database?sslmode=require
 - Previews up to 100 rows for the selected object
 - Compresses long cell values like large text fields, JSON, and vectors into compact previews
 - Keeps important path-like fields such as `source_path` visible
-- Adds a graph view for `public.document_chunks` using PCA over chunk embeddings and `connected_nodes` edges
-- Adds a graph view for `public.memory_nodes` / `public.memory_edges`, using PCA for embedded nodes and neighbor-based placement for non-embedded message nodes
+- Adds a navigable 3D graph view for `public.document_chunks` using PCA over chunk embeddings and `connected_nodes` edges
+- Adds a navigable 3D graph view for `public.memory_nodes` / `public.memory_edges`, using PCA for embedded nodes and neighbor-based placement only as a fallback when embeddings are missing
 - Supports common hosted Postgres URLs that require `sslmode=require`
 
 ## Notes
