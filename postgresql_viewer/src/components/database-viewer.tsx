@@ -37,6 +37,9 @@ type GraphNode = {
   label: string;
   title: string;
   nodeType: string;
+  contentPreview: string;
+  metadata: Record<string, unknown>;
+  sourcePath: string;
   x: number;
   y: number;
   z: number;
@@ -109,6 +112,25 @@ function formatArrayValue(value: unknown[]) {
 
 function formatObjectValue(value: Record<string, unknown>) {
   return truncateText(JSON.stringify(value), MAX_OBJECT_PREVIEW);
+}
+
+function normalizeObjectRecord(value: unknown): Record<string, unknown> {
+  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+
+  if (typeof value !== "string") {
+    return {};
+  }
+
+  try {
+    const parsed = JSON.parse(value);
+    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
 }
 
 function parseEmbedding(value: unknown): number[] | null {
@@ -423,13 +445,21 @@ function buildGraphData(
             ? row.title.trim()
             : nodeId;
         const nodeType = typeof row.node_type === "string" ? row.node_type : "memory_node";
+        const content =
+          typeof row.content === "string" ? row.content : "";
         const contentPreview =
-          typeof row.content === "string" ? truncateText(row.content, 28) : nodeId;
+          content ? truncateText(content, 220) : "";
+        const metadata = normalizeObjectRecord(row.metadata);
+        const sourcePath =
+          typeof metadata.source_path === "string" ? metadata.source_path : "";
         return {
           id: nodeId,
           label: title === nodeId ? `${nodeType}: ${contentPreview}` : title,
           title: `${nodeId} (${nodeType})`,
           nodeType,
+          contentPreview,
+          metadata,
+          sourcePath,
           embedding: parseEmbedding(row.embedding),
           scoreLabel: nodeType,
           radius:
@@ -457,6 +487,11 @@ function buildGraphData(
         ? Math.max(1, windowEnd - windowStart + 1)
         : 1;
 
+      const metadata = normalizeObjectRecord(row.metadata);
+      const sourcePath =
+        typeof row.source_path === "string" ? row.source_path : "";
+      const content =
+        typeof row.content === "string" ? row.content : "";
       return {
         id: chunkId,
         label:
@@ -465,6 +500,16 @@ function buildGraphData(
             : chunkId,
         title: chunkId,
         nodeType: "document_chunk",
+        contentPreview: content ? truncateText(content, 220) : "",
+        metadata: {
+          ...metadata,
+          document_id: row.document_id,
+          source_kind: row.source_kind,
+          chunk_index: row.chunk_index,
+          window_start_chunk_index: row.window_start_chunk_index,
+          window_end_chunk_index: row.window_end_chunk_index,
+        },
+        sourcePath,
         embedding,
         scoreLabel:
           typeof row.score === "number"
@@ -579,6 +624,9 @@ function buildGraphData(
     label: truncateText(node.label, 30),
     title: node.title,
     nodeType: node.nodeType,
+    contentPreview: node.contentPreview,
+    metadata: node.metadata,
+    sourcePath: node.sourcePath,
     x: normalizedPoints[index].x,
     y: normalizedPoints[index].y,
     z: normalizedPoints[index].z,
@@ -691,6 +739,7 @@ export function DatabaseViewer() {
   const [showGraphLabels, setShowGraphLabels] = useState(true);
   const [visibleNodeTypes, setVisibleNodeTypes] = useState<Record<string, boolean>>({});
   const [visibleEdgeTypes, setVisibleEdgeTypes] = useState<Record<string, boolean>>({});
+  const [selectedGraphNodeId, setSelectedGraphNodeId] = useState<string | null>(null);
   const dragStateRef = useRef<{ x: number; y: number } | null>(null);
 
   const canRenderGraph =
@@ -765,6 +814,19 @@ export function DatabaseViewer() {
     () => new Map(projectedGraphNodes.map((node) => [node.id, node])),
     [projectedGraphNodes],
   );
+  const selectedGraphNode = useMemo(
+    () => filteredGraphNodes.find((node) => node.id === selectedGraphNodeId) ?? null,
+    [filteredGraphNodes, selectedGraphNodeId],
+  );
+
+  useEffect(() => {
+    if (!selectedGraphNodeId) {
+      return;
+    }
+    if (!filteredNodeIds.has(selectedGraphNodeId)) {
+      setSelectedGraphNodeId(null);
+    }
+  }, [filteredNodeIds, selectedGraphNodeId]);
 
   function resetGraphView() {
     setGraphYaw(0.55);
@@ -824,6 +886,19 @@ export function DatabaseViewer() {
     zoomGraphBy(zoomDelta);
   }
 
+  function handleGraphNodeClick(
+    event: React.MouseEvent<SVGCircleElement>,
+    nodeId: string,
+  ) {
+    event.stopPropagation();
+    setSelectedGraphNodeId(nodeId);
+  }
+
+  function handleGraphNodePointerDown(event: React.PointerEvent<SVGCircleElement>) {
+    event.stopPropagation();
+    dragStateRef.current = null;
+  }
+
   async function loadGraphData(table: TableEntry, connectionString: string) {
     if (!(table.schema === "public" && GRAPH_TABLES.has(table.name))) {
       setGraphPayload(null);
@@ -856,6 +931,7 @@ export function DatabaseViewer() {
     setErrorMessage("");
     setPreviewMode("rows");
     setGraphPayload(null);
+    setSelectedGraphNodeId(null);
     resetGraphView();
 
     try {
@@ -1203,7 +1279,10 @@ export function DatabaseViewer() {
                               cy={node.projectedY}
                               r={node.projectedRadius}
                               className={styles.graphNode}
+                              data-selected={selectedGraphNodeId === node.id}
                               opacity={0.36 + ((node.depth + 1) / 2) * 0.64}
+                              onClick={(event) => handleGraphNodeClick(event, node.id)}
+                              onPointerDown={handleGraphNodePointerDown}
                             >
                               <title>
                                 {`${node.title}\nscore: ${node.scoreLabel || "n/a"}`}
@@ -1224,6 +1303,59 @@ export function DatabaseViewer() {
                         ))}
                       </svg>
                     </div>
+                    {selectedGraphNode ? (
+                      <aside className={styles.graphNodeCard}>
+                        <div className={styles.graphNodeCardHeader}>
+                          <div>
+                            <p className={styles.graphNodeCardEyebrow}>
+                              {selectedGraphNode.nodeType}
+                            </p>
+                            <h3>{selectedGraphNode.label}</h3>
+                          </div>
+                          <button
+                            type="button"
+                            className={styles.graphNodeCardClose}
+                            onClick={() => setSelectedGraphNodeId(null)}
+                          >
+                            Close
+                          </button>
+                        </div>
+                        <dl className={styles.graphNodeCardMeta}>
+                          <div>
+                            <dt>ID</dt>
+                            <dd>{selectedGraphNode.id}</dd>
+                          </div>
+                          {selectedGraphNode.scoreLabel ? (
+                            <div>
+                              <dt>Score</dt>
+                              <dd>{selectedGraphNode.scoreLabel}</dd>
+                            </div>
+                          ) : null}
+                          {selectedGraphNode.sourcePath ? (
+                            <div>
+                              <dt>Source Path</dt>
+                              <dd>{selectedGraphNode.sourcePath}</dd>
+                            </div>
+                          ) : null}
+                        </dl>
+                        {selectedGraphNode.contentPreview ? (
+                          <div className={styles.graphNodeCardSection}>
+                            <p className={styles.graphNodeCardLabel}>Content Preview</p>
+                            <p className={styles.graphNodeCardText}>
+                              {selectedGraphNode.contentPreview}
+                            </p>
+                          </div>
+                        ) : null}
+                        {Object.keys(selectedGraphNode.metadata).length > 0 ? (
+                          <div className={styles.graphNodeCardSection}>
+                            <p className={styles.graphNodeCardLabel}>Metadata</p>
+                            <pre className={styles.graphNodeCardPre}>
+                              {JSON.stringify(selectedGraphNode.metadata, null, 2)}
+                            </pre>
+                          </div>
+                        ) : null}
+                      </aside>
+                    ) : null}
                   </div>
                 ) : (
                   <p className={styles.emptyState}>
